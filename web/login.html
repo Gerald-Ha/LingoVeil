@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LingoVeil Login</title>
+  <link rel="icon" type="image/png" href="/static/img/favicon.png?v=20260807-1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260807-15">
+</head>
+<body class="app-shell login-shell">
+  <main class="login-card">
+    <div class="login-brand">
+      <h1><img src="/static/img/favicon.png?v=20260807-1" alt="" class="login-brand-logo">LingoVeil</h1>
+      <p id="login-intro">Sign in with your user account.</p>
+    </div>
+    <form id="login-form" class="login-form">
+      <label class="field-label" for="login-username" id="login-username-label">Username</label>
+      <input type="text" maxlength="64" id="login-username"
+        class="text-input session-code-input" autocomplete="username">
+      <label class="field-label hidden" for="login-email" id="login-email-label">Email</label>
+      <input type="email" maxlength="320" id="login-email"
+        class="text-input session-code-input hidden" autocomplete="email">
+      <label class="field-label hidden" for="login-code" id="login-code-label">Recovery code</label>
+      <input type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" id="login-code"
+        class="text-input session-code-input hidden" autocomplete="one-time-code">
+      <label class="field-label" for="login-password" id="login-password-label">Password</label>
+      <input type="password" maxlength="1024" id="login-password"
+        class="text-input session-code-input" autocomplete="current-password">
+      <label class="field-label hidden" for="login-confirm-password" id="login-confirm-label">Repeat new password</label>
+      <input type="password" maxlength="1024" id="login-confirm-password"
+        class="text-input session-code-input hidden" autocomplete="new-password">
+      <button type="submit" class="primary full-width" id="login-submit">Sign in</button>
+      <button type="button" class="secondary full-width hidden" id="login-forgot">Forgot password?</button>
+      <button type="button" class="secondary full-width hidden" id="login-mode">Register a new account</button>
+      <p id="login-hint" class="session-hint">Enter your username and password.</p>
+    </form>
+  </main>
+  <script>
+    const byId = (id) => document.getElementById(id);
+
+    const form = byId("login-form");
+
+    const usernameInput = byId("login-username");
+
+    const passwordInput = byId("login-password");
+
+    const emailInput = byId("login-email");
+
+    const codeInput = byId("login-code");
+
+    const confirmInput = byId("login-confirm-password");
+
+    const usernameLabel = byId("login-username-label");
+
+    const passwordLabel = byId("login-password-label");
+
+    const emailLabel = byId("login-email-label");
+
+    const codeLabel = byId("login-code-label");
+
+    const confirmLabel = byId("login-confirm-label");
+
+    const submitButton = byId("login-submit");
+
+    const modeButton = byId("login-mode");
+
+    const forgotButton = byId("login-forgot");
+
+    const hint = byId("login-hint");
+
+    const intro = byId("login-intro");
+
+    let mode = "login";
+    let registrationEnabled = false;
+    let bootstrapRequired = false;
+    let resetAvailable = false;
+    let language = "en";
+    const TEXT = {
+      en: {
+        intro: "Sign in with your user account.", username: "Username", password: "Password",
+        newPassword: "New password", repeatPassword: "Repeat new password", email: "Email",
+        code: "Recovery code", signIn: "Sign in", register: "Register",
+        newAccount: "Register a new account", back: "Back to sign in", forgot: "Forgot password?",
+        sendCode: "Send recovery code", resetPassword: "Set new password",
+        loginHint: "Enter your username and password.", registerHint: "The password must be at least 8 characters long.",
+        bootstrapHint: "Create the first account. It automatically receives administrator privileges. The password must be at least 8 characters long.",
+        forgotHint: "Enter the email address stored in your account.",
+        resetHint: "Enter the six-digit code from the email and choose a new password.",
+        codeSent: "The recovery code was sent. It is valid for 15 minutes.",
+        resetDone: "Your password was changed. You can now sign in.",
+        mismatch: "The new passwords do not match.", required: "Please complete all required fields.",
+        invalid: "Invalid input", failed: "Sign-in failed", closed: "New registrations are currently disabled by the administrator."
+      },
+      de: {
+        intro: "Mit deinem Benutzerkonto anmelden.", username: "Benutzername", password: "Passwort",
+        newPassword: "Neues Passwort", repeatPassword: "Neues Passwort wiederholen", email: "E-Mail",
+        code: "Wiederherstellungscode", signIn: "Anmelden", register: "Registrieren",
+        newAccount: "Neues Konto registrieren", back: "Zurück zur Anmeldung", forgot: "Passwort vergessen?",
+        sendCode: "Wiederherstellungscode senden", resetPassword: "Neues Passwort setzen",
+        loginHint: "Benutzername und Passwort eingeben.", registerHint: "Das Passwort muss mindestens 8 Zeichen lang sein.",
+        bootstrapHint: "Erstelle das erste Konto. Es erhält automatisch Administratorrechte. Das Passwort muss mindestens 8 Zeichen lang sein.",
+        forgotHint: "Gib die in deinem Konto gespeicherte E-Mail-Adresse ein.",
+        resetHint: "Gib den sechsstelligen Code aus der E-Mail ein und wähle ein neues Passwort.",
+        codeSent: "Der Wiederherstellungscode wurde gesendet und ist 15 Minuten gültig.",
+        resetDone: "Dein Passwort wurde geändert. Du kannst dich jetzt anmelden.",
+        mismatch: "Die neuen Passwörter stimmen nicht überein.", required: "Bitte alle benötigten Felder ausfüllen.",
+        invalid: "Ungültige Eingabe", failed: "Anmeldung fehlgeschlagen", closed: "Neue Registrierungen wurden vom Administrator deaktiviert."
+      }
+    };
+
+    const t = (key) => TEXT[language][key];
+    const EN_ERRORS = {
+      "Neue Registrierungen sind derzeit deaktiviert": "New registrations are currently disabled",
+      "Benutzername muss 3 bis 64 Zeichen lang sein": "Username must be between 3 and 64 characters long",
+      "Ungültige E-Mail-Adresse": "Invalid email address",
+      "Passwort muss mindestens 8 Zeichen lang sein": "Password must be at least 8 characters long",
+      "Benutzername oder E-Mail-Adresse ist bereits vergeben": "Username or email address is already in use",
+      "Ungültiger Benutzername oder ungültiges Passwort": "Invalid username or password",
+      "Für diese E-Mail-Adresse wurde kein Konto gefunden": "No account was found for this email address",
+      "Bitte warte eine Minute, bevor du einen neuen Code anforderst": "Please wait one minute before requesting another code",
+      "Der Wiederherstellungscode muss aus 6 Ziffern bestehen": "The recovery code must contain 6 digits",
+      "Der Wiederherstellungscode ist ungültig oder abgelaufen": "The recovery code is invalid or has expired",
+      "Zu viele Fehlversuche; fordere bitte einen neuen Code an": "Too many failed attempts; please request a new code",
+      "Die Wiederherstellungs-E-Mail konnte nicht gesendet werden": "The recovery email could not be sent"
+    };
+
+    const localizeError = (message) => language === "en" ? (EN_ERRORS[message] || message) : message;
+    const showField = (input, label, visible, required = visible) => {
+      input.classList.toggle("hidden", !visible);
+
+      label.classList.toggle("hidden", !visible);
+
+      input.required = required;
+    };
+
+    const render = () => {
+      document.documentElement.lang = language;
+      intro.textContent = t("intro");
+
+      usernameLabel.textContent = t("username");
+
+      emailLabel.textContent = t("email");
+
+      codeLabel.textContent = t("code");
+
+      confirmLabel.textContent = t("repeatPassword");
+
+      const isLogin = mode === "login";
+      const isRegister = mode === "register";
+      const isForgot = mode === "forgot";
+      const isReset = mode === "reset";
+      showField(usernameInput, usernameLabel, isLogin || isRegister);
+
+      showField(passwordInput, passwordLabel, isLogin || isRegister || isReset);
+
+      showField(emailInput, emailLabel, isRegister || isForgot || isReset);
+
+      showField(codeInput, codeLabel, isReset);
+
+      showField(confirmInput, confirmLabel, isReset);
+
+      emailInput.readOnly = isReset;
+      passwordLabel.textContent = isReset ? t("newPassword") : t("password");
+
+      passwordInput.autocomplete = isLogin ? "current-password" : "new-password";
+      submitButton.textContent = isLogin ? t("signIn") : isRegister ? t("register") : isForgot ? t("sendCode") : t("resetPassword");
+
+      modeButton.textContent = isLogin ? t("newAccount") : t("back");
+
+      modeButton.classList.toggle("hidden", isLogin ? !registrationEnabled : false);
+
+      forgotButton.textContent = t("forgot");
+
+      forgotButton.classList.toggle("hidden", !isLogin || !resetAvailable);
+
+      hint.textContent = isRegister ? (bootstrapRequired ? t("bootstrapHint") : t("registerHint"))
+
+        : isForgot ? t("forgotHint") : isReset ? t("resetHint")
+
+          : (!registrationEnabled ? t("closed") : t("loginHint"));
+
+      hint.style.color = "";
+    };
+
+    fetch("/api/auth/config", {credentials: "same-origin"})
+
+      .then((response) => response.json()).then((config) => {
+        language = config.interface_language === "de" ? "de" : "en";
+        registrationEnabled = Boolean(config.registration_enabled);
+
+        bootstrapRequired = Boolean(config.bootstrap_required);
+
+        resetAvailable = Boolean(config.password_reset_available);
+
+        render();
+      }).catch(() => render());
+
+    modeButton.addEventListener("click", () => {
+      mode = mode === "login" ? "register" : "login";
+      emailInput.readOnly = false;
+      render();
+    });
+
+    forgotButton.addEventListener("click", () => { mode = "forgot"; render(); });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const username = usernameInput.value.trim();
+
+      const password = passwordInput.value;
+      const email = emailInput.value.trim();
+
+      const code = codeInput.value.trim();
+
+      if ((mode === "login" && (!username || !password))
+
+          || (mode === "register" && (!username || !email || !password))
+
+          || (mode === "forgot" && !email)
+
+          || (mode === "reset" && (!email || !code || !password || !confirmInput.value))) {
+        hint.textContent = t("required"); hint.style.color = "var(--error)"; return;
+      }
+
+      if (mode === "reset" && password !== confirmInput.value) {
+        hint.textContent = t("mismatch"); hint.style.color = "var(--error)"; return;
+      }
+
+      let url = "/api/login";
+      let body = {username, password};
+
+      if (mode === "register") { url = "/api/register"; body = {username, email, password}; }
+
+      if (mode === "forgot") { url = "/api/password-reset/request"; body = {email}; }
+
+      if (mode === "reset") { url = "/api/password-reset/confirm"; body = {email, code, new_password: password}; }
+
+      submitButton.disabled = true;
+      try {
+        const response = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, credentials: "same-origin", body: JSON.stringify(body)});
+
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          const detail = data.detail;
+          const message = Array.isArray(detail) ? detail.map((item) => item?.msg || t("invalid")).join("; ")
+
+            : typeof detail === "string" ? detail : data.error || t("failed");
+
+          throw new Error(localizeError(message));
+        }
+
+        if (mode === "forgot") { mode = "reset"; passwordInput.value = ""; render(); hint.textContent = t("codeSent"); return; }
+
+        if (mode === "reset") {
+          mode = "login"; emailInput.value = ""; codeInput.value = ""; passwordInput.value = ""; confirmInput.value = "";
+          render(); hint.textContent = t("resetDone"); return;
+        }
+
+        passwordInput.value = "";
+        window.location.replace("/");
+      } catch (error) {
+        hint.textContent = error.message; hint.style.color = "var(--error)";
+      } finally { submitButton.disabled = false; }
+    });
+
+  </script>
+</body>
+</html>

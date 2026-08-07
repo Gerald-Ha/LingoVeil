@@ -1,0 +1,11 @@
+alpha/.venv
+alpha/.pytest_cache
+alpha/artifacts
+alpha/models
+alpha/tools
+alpha/**/__pycache__
+alpha/**/*.pyc
+lingoveil-live/data
+lingoveil-live/cache
+lingoveil-live/modelle
+.git

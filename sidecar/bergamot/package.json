@@ -1,0 +1,14 @@
+{
+  "name": "lingoveil-bergamot-sidecar",
+  "version": "1.0.0",
+  "description": "LingoVeil Bergamot JSONL-Sidecar",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "postinstall": "node patch-worker.mjs",
+    "sidecar": "node bergamot_sidecar.mjs"
+  },
+  "dependencies": {
+    "@browsermt/bergamot-translator": "^0.4.9"
+  }
+}

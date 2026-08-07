@@ -1,0 +1,7 @@
+services:
+  lingoveil-live:
+    user: "${LINGOVEIL_LIVE_UID:-1000}:${LINGOVEIL_LIVE_GID:-1000}"
+    volumes:
+      - ./modelle:/app/modelle:Z
+      - ./data:/app/data:Z
+      - ./cache:/app/cache:Z

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LingoVeil Live</title>
+  <link rel="icon" type="image/png" href="/static/img/favicon.png?v=20260807-1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260807-18">
+</head>
+<body class="app-shell">
+  <header class="app-header" id="app-header">
+    <div class="header-brand">
+      <h1><img class="header-brand-logo" src="/static/img/favicon.png" alt="" aria-hidden="true">LingoVeil</h1>
+    </div>
+    <button type="button" class="mobile-menu-toggle" id="mobile-menu-toggle" aria-controls="mobile-header-menu" aria-expanded="false" aria-label="Menü öffnen">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </button>
+    <div class="header-menu-panel" id="mobile-header-menu">
+      <div class="header-controls">
+        <div id="session-panel" hidden aria-hidden="true">
+          <input type="hidden" id="session-code-input">
+          <button type="button" id="btn-connect" hidden>Verbinden</button>
+          <p id="session-hint" hidden></p>
+        </div>
+        <label class="engine-label" for="engine-select">Engine</label>
+        <select id="engine-select" class="engine-select" aria-label="Übersetzungsengine">
+          <option value="bergamot">Bergamot lokal</option>
+        <option value="seamless_m4t" disabled>SeamlessM4T lokal</option>
+        <option value="lm_studio" disabled hidden>LM Studio</option>
+        </select>
+      </div>
+      <div class="header-updates" id="header-updates" aria-live="polite"></div>
+    </div>
+  </header>
+  <div class="app-body">
+    <aside class="sidebar sidebar-left" id="sidebar-left">
+      <section class="panel compact">
+        <div class="source-heading">
+          <h2>Eingabequelle</h2>
+          <button type="button" class="mobile-section-toggle" id="source-section-toggle" aria-controls="source-section-content" aria-expanded="false" aria-label="Eingabequelle aufklappen">
+            <span aria-hidden="true">⌄</span>
+          </button>
+        </div>
+        <div class="mobile-section-content source-section-content" id="source-section-content">
+          <div id="panel-page-analyze" class="source-panel">
+            <label class="field-label" for="url-page">URL-Eingabe</label>
+            <input type="url" id="url-page" placeholder="Webseite, Bild- oder PDF-URL" class="text-input">
+            <button type="button" id="btn-analyze-page" class="secondary full-width">Laden</button>
+            <p class="field-error hidden" id="err-page-analyze"></p>
+          </div>
+        </div>
+      </section>
+      <section class="panel compact history-panel">
+        <div class="history-heading">
+          <div class="sidebar-library-tabs" role="tablist" aria-label="Bibliothek">
+            <button type="button" class="sidebar-library-tab active" id="tab-history" role="tab" aria-selected="true">History</button>
+            <span aria-hidden="true">/</span>
+            <button type="button" class="sidebar-library-tab" id="tab-bookmarks" role="tab" aria-selected="false">Bookmarks</button>
+            <button type="button" class="bookmark-refresh hidden" id="btn-bookmarks-refresh" aria-label="Bookmarks auf neue Chapter prüfen" title="Jetzt auf neue Chapter prüfen">↻</button>
+            <button type="button" class="bookmark-edit hidden" id="btn-bookmarks-edit" aria-label="Bookmarks bearbeiten" title="Bookmarks bearbeiten" aria-pressed="false">✎</button>
+          </div>
+          <span id="library-count">0</span>
+          <button type="button" class="mobile-section-toggle" id="history-section-toggle" aria-controls="history-section-content" aria-expanded="false" aria-label="History und Bookmarks aufklappen">
+            <span aria-hidden="true">⌄</span>
+          </button>
+        </div>
+        <div class="mobile-section-content history-section-content" id="history-section-content">
+          <div class="bookmark-search hidden" id="bookmark-search-wrap">
+            <label class="sr-only" for="bookmark-search">Bookmarks durchsuchen</label>
+            <input type="search" id="bookmark-search" class="text-input" placeholder="Bookmarks durchsuchen …" autocomplete="off">
+          </div>
+          <div id="history-list" class="history-list">
+            <p class="hint">Noch keine URL gespeichert.</p>
+          </div>
+          <div id="bookmark-list" class="history-list hidden">
+            <p class="hint">Noch keine Manga-Bookmarks gespeichert.</p>
+          </div>
+        </div>
+      </section>
+    </aside>
+    <main class="preview-main" id="preview-main">
+      <div class="preview-toolbar">
+        <div>
+          <h2 id="preview-title">Vorschau</h2>
+        </div>
+        <div class="preview-tools">
+          <div class="preview-tools-row preview-tools-row-primary">
+            <button type="button" id="btn-toggle-translation" class="secondary small" disabled>Übersetzung aus</button>
+            <button type="button" id="btn-fit" class="secondary small active-tool">An Fenster anpassen</button>
+          </div>
+          <div class="preview-tools-row preview-tools-row-zoom">
+            <label class="zoom-control" for="zoom-slider">
+              <span id="zoom-label">100 %</span>
+              <input type="range" id="zoom-slider" min="25" max="300" value="100" step="5">
+            </label>
+          </div>
+          <div class="preview-tools-row preview-tools-row-nav">
+            <button type="button" id="btn-preview-chapter-prev" class="secondary small chapter-nav preview-nav-button" aria-label="Vorheriges Chapter" disabled><span class="preview-nav-arrow arrow-left" aria-hidden="true"></span><span>Chapter</span></button>
+            <button type="button" id="btn-preview-prev" class="secondary small preview-nav-button" aria-label="Vorherige Page" disabled><span class="preview-nav-arrow arrow-left" aria-hidden="true"></span><span>Page</span></button>
+            <button type="button" id="btn-preview-next" class="secondary small preview-nav-button" aria-label="Nächste Page" disabled><span>Page</span><span class="preview-nav-arrow arrow-right" aria-hidden="true"></span></button>
+            <button type="button" id="btn-preview-chapter-next" class="secondary small chapter-nav preview-nav-button" aria-label="Nächstes Chapter" disabled><span>Chapter</span><span class="preview-nav-arrow arrow-right" aria-hidden="true"></span></button>
+          </div>
+        </div>
+      </div>
+      <div class="preview-meta" id="preview-meta" aria-live="polite"></div>
+      <div class="preview-viewport viewport-fit viewport-empty" id="preview-viewport">
+        <div id="preview-placeholder" class="preview-placeholder">
+          <span id="preview-placeholder-idle">Noch keine Vorschau.</span>
+          <div id="preview-placeholder-loading" class="preview-loading hidden">
+            <div class="preview-spinner" aria-hidden="true"></div>
+            <span id="preview-loading-text">Wird geladen …</span>
+          </div>
+        </div>
+        <div class="preview-pan-layer hidden" id="preview-pan-layer">
+          <div class="preview-image-wrap" id="preview-image-wrap">
+            <img id="preview-image" alt="Vorschau" class="preview-fit" draggable="false">
+          </div>
+        </div>
+        <div class="preview-processing-overlay hidden" id="preview-processing-overlay" role="status" aria-live="polite">
+          <div class="preview-spinner" aria-hidden="true"></div>
+          <span id="preview-processing-text">Wird gerade übersetzt …</span>
+        </div>
+      </div>
+    </main>
+    <aside class="sidebar sidebar-right gallery-sidebar" id="gallery-sidebar">
+      <div class="gallery-header">
+        <div>
+          <h2>Gefundene Bilder</h2>
+          <p class="gallery-count" id="gallery-count">0 Bilder</p>
+        </div>
+        <button type="button" class="mobile-section-toggle" id="gallery-section-toggle" aria-controls="gallery-section-content" aria-expanded="false" aria-label="Gefundene Bilder aufklappen">
+          <span aria-hidden="true">⌄</span>
+        </button>
+      </div>
+      <div class="mobile-section-content gallery-section-content" id="gallery-section-content">
+        <div class="gallery-selection" id="gallery-selection">
+          <span id="selected-image-label">Kein Bild ausgewählt</span>
+          <button type="button" id="btn-translate-gallery" class="secondary small full-width" disabled>Erneut übersetzen</button>
+        </div>
+        <div class="gallery-scroll" id="gallery-scroll">
+          <div class="thumb-grid" id="page-images"></div>
+          <p class="gallery-empty" id="gallery-empty">Lade eine Webseite, um Bilder hier anzuzeigen.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <dialog class="engine-error-dialog" id="engine-error-dialog">
+    <h2>Engine nicht verfügbar</h2>
+    <p id="engine-error-message"></p>
+    <p class="hint">Als sichere Alternative wurde Bergamot lokal ausgewählt.</p>
+    <div class="engine-error-actions">
+      <button type="button" class="primary" id="btn-engine-error-close">Schließen</button>
+    </div>
+  </dialog>
+  <dialog class="engine-error-dialog" id="url-error-dialog">
+    <h2>Inhalt konnte nicht geladen werden</h2>
+    <p id="url-error-message"></p>
+    <p class="hint">Die ausgewählte Übersetzungsengine wurde nicht verändert.</p>
+    <div class="engine-error-actions">
+      <button type="button" class="primary" id="btn-url-error-close">Schließen</button>
+    </div>
+  </dialog>
+  <dialog class="manga-catalog-dialog" id="manga-catalog-dialog">
+    <div class="manga-catalog-header">
+      <div>
+        <p class="manga-catalog-site" id="manga-catalog-site"></p>
+        <h2 id="manga-catalog-title">Chapter auswählen</h2>
+      </div>
+      <button type="button" class="manga-catalog-close" id="btn-manga-catalog-close" aria-label="Chapter-Auswahl schließen" title="Schließen">×</button>
+    </div>
+    <div class="manga-catalog-content" id="manga-catalog-content"></div>
+  </dialog>
+  <dialog class="bookmark-remove-dialog" id="bookmark-remove-dialog">
+    <h2>Bookmark entfernen?</h2>
+    <p id="bookmark-remove-message"></p>
+    <p class="hint">Du kannst die gespeicherten Lesedaten und Chapter-Datumsangaben behalten oder ebenfalls löschen.</p>
+    <div class="bookmark-remove-actions">
+      <button type="button" class="secondary" id="btn-bookmark-remove-cancel">Abbrechen</button>
+      <button type="button" class="secondary" id="btn-bookmark-remove-keep">Entfernen, Lesedaten behalten</button>
+      <button type="button" class="danger" id="btn-bookmark-remove-delete">Entfernen und Lesedaten löschen</button>
+    </div>
+  </dialog>
+  <script src="/static/i18n.js?v=20260807-11"></script>
+  <script src="/static/app.js?v=20260807-8"></script>
+  <script src="/static/live-controls.js?v=20260807-14"></script>
+</body>
+</html>

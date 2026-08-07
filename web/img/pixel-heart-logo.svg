@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 16 16"
+     width="512"
+     height="512"
+     role="img"
+     aria-labelledby="title desc"
+     shape-rendering="crispEdges">
+  <title id="title">Pixel Heart</title>
+  <desc id="desc">Pixel heart with red border, pink center and white reflection on the left.</desc>
+
+  <!-- Roter Außenrand -->
+  <path fill="#D91E36" d="
+    M3 2h4v1h2V2h4v1h2v6h-1v2h-2v2h-2v2H6v-2H4v-2H2V9H1V3h2z
+  "/>
+
+  <!-- Pinker Innenbereich -->
+  <path fill="#FF4F9A" d="
+    M3 4h4v1h2V4h4v1h1v4h-1v2h-2v2H9v1H7v-1H5v-2H3V9H2V5h1z
+  "/>
+
+  <!-- Weiße Pixel-Reflexion -->
+  <path fill="#FFFFFF" d="
+    M3 5h2v1H3z
+    M3 6h1v2H3z
+    M4 5h1v1H4z
+  "/>
+</svg>

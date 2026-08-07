@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lingoveil
+      POSTGRES_USER: lingoveil
+      POSTGRES_PASSWORD: "${LINGOVEIL_POSTGRES_PASSWORD:-change-me}"
+    volumes:
+      - lingoveil-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${LINGOVEIL_POSTGRES_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lingoveil -d lingoveil"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  lingoveil-live:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lingoveil-live:local
+    container_name: lingoveil-live
+    restart: unless-stopped
+    init: true
+    environment:
+      LINGOVEIL_DATABASE_URL: "${LINGOVEIL_DATABASE_URL:-postgresql://lingoveil:change-me@postgres:5432/lingoveil}"
+      LINGOVEIL_SESSION_HOURS: "${LINGOVEIL_SESSION_HOURS:-72}"
+      LINGOVEIL_SESSION_COOKIE_SECURE: "${LINGOVEIL_SESSION_COOKIE_SECURE:-false}"
+      LINGOVEIL_SMTP_HOST: "${LINGOVEIL_SMTP_HOST:-}"
+      LINGOVEIL_SMTP_PORT: "${LINGOVEIL_SMTP_PORT:-587}"
+      LINGOVEIL_SMTP_USE_TLS: "${LINGOVEIL_SMTP_USE_TLS:-true}"
+      LINGOVEIL_SMTP_USERNAME: "${LINGOVEIL_SMTP_USERNAME:-}"
+      LINGOVEIL_SMTP_PASSWORD: "${LINGOVEIL_SMTP_PASSWORD:-}"
+      LINGOVEIL_SMTP_FROM: "${LINGOVEIL_SMTP_FROM:-}"
+      LINGOVEIL_PUBLIC_URL: "${LINGOVEIL_PUBLIC_URL:-}"
+      LINGOVEIL_LIVE_PORT: "${LINGOVEIL_LIVE_PORT:-8765}"
+      LINGOVEIL_LIVE_DATA_DIR: /app/data
+      LINGOVEIL_LIVE_MODELS_DIR: /app/modelle
+      LINGOVEIL_LIVE_CACHE_DIR: /app/cache
+      LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED: "${LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED:-false}"
+      LINGOVEIL_BERGAMOT_LANGUAGETOOL_TIMEOUT_SEC: "${LINGOVEIL_BERGAMOT_LANGUAGETOOL_TIMEOUT_SEC:-5}"
+      UPDATE_ENABLED: "${update:-true}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:${LINGOVEIL_LIVE_PORT:-8765}:${LINGOVEIL_LIVE_PORT:-8765}"
+    volumes:
+      - lingoveil-models:/app/modelle
+      - lingoveil-data:/app/data
+      - lingoveil-cache:/app/cache
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  lingoveil-postgres:
+  lingoveil-models:
+  lingoveil-data:
+  lingoveil-cache:
