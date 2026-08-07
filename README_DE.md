@@ -1,4 +1,7 @@
+<img align="left" width="80" alt="favicon" src="https://github.com/user-attachments/assets/cb22d006-7eeb-4627-9782-493af6320e6b" />
+
 # LingoVeil
+<br>
 
 **Mangas, Comics und Bildinhalte in deiner Sprache lesen – ohne Texte aus Sprechblasen manuell kopieren zu müssen.**
 
@@ -8,6 +11,21 @@ Es erkennt Text direkt aus Bildern, übersetzt ihn in die gewünschte Sprache un
 Damit richtet sich LingoVeil nicht nur an technisch versierte Nutzer, sondern vor allem an Leser, die Mangas oder Comics lesen möchten, obwohl sie die ursprüngliche Sprache – beispielsweise Englisch – nicht ausreichend beherrschen.
 
 LingoVeil kann einzelne Bilder und PDFs verarbeiten, Webseiten laden und bietet für ausgewählte Manga-Seiten einen eigenen Lesemodus mit Chaptern, Bookmarks und Lesefortschritt.
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/11d06c31-6358-4688-9105-0e2ec97edc60" target="_blank">
+        <img width="600" alt="translate1" src="https://github.com/user-attachments/assets/11d06c31-6358-4688-9105-0e2ec97edc60" />
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/82dee316-9406-43eb-9d97-83e2722db473" target="_blank">
+        <img width="600" alt="translate2" src="https://github.com/user-attachments/assets/82dee316-9406-43eb-9d97-83e2722db473" />
+      </a>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -161,6 +179,16 @@ Der Administrator verwaltet außerdem installierte Modelle sowie die optionale L
 
 ---
 ## Smartphone und Tablet
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" target="_blank">
+        <img height="500" alt="translate2" src="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" />
+      </a>
+    </td>
+  </tr>
+</table>
 
 LingoVeil besitzt eine **responsive Benutzeroberfläche** und passt sich automatisch an kleinere Displays an. Dadurch lässt sich LingoVeil nicht nur am Desktop, sondern auch bequem auf **Smartphones und Tablets** verwenden.
 
