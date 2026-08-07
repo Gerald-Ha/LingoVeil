@@ -1,4 +1,8 @@
+<img align="left" width="80" alt="favicon" src="https://github.com/user-attachments/assets/cb22d006-7eeb-4627-9782-493af6320e6b" />
+
 # LingoVeil
+<br>
+
 
 **Read manga, comics, and image-based content in your own language — without manually copying text from speech bubbles.**
 
