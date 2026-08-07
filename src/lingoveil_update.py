@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 import httpx
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 UPDATE_API_KEY = "upd_4d5c02e8e4fad4c80f0ddd311e5e83816a4cbdea1b99808877a0a9977f15dc78"
 UPDATE_PROJECT_ID = "lingoveil-docker"
 UPDATE_SERVER_URL = "https://update.gerald-hasani.com"

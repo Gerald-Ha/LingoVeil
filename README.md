@@ -555,6 +555,7 @@ For most installations, the default values are sufficient.
 | `LINGOVEIL_SMTP_*` | empty | optional email configuration |
 | `LINGOVEIL_PUBLIC_URL` | empty | public URL for links in emails |
 | `LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED` | `false` | local LanguageTool correction for Bergamot |
+| `LINGOVEIL_ENGINE_IDLE_MINUTES` | `2` | unload EasyOCR, Bergamot and Seamless after this idle period; `0` disables the timer |
 | `update` | `true` | automatic update check |
 
 </details>

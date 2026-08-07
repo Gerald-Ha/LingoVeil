@@ -2918,7 +2918,6 @@ function initPreviewPan() {
     }
   }
 
-  // WebView-Kombinationen unzuverlässig, wenn das Bild in einer transformierten
   viewport.addEventListener("mousedown", onPanStart);
 
   window.addEventListener("mousemove", onPanMove);

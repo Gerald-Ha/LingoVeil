@@ -47,6 +47,10 @@ class BergamotTranslatorClient:
             return self.settings.sidecar_script
         project_root = Path(__file__).resolve().parent.parent
         return project_root / "sidecar" / "bergamot" / "bergamot_sidecar.mjs"
+    @property
+    def busy(self) -> bool:
+        return self._request_lock.locked()
+
     def start(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
             return

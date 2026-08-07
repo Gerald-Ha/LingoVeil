@@ -1,6 +1,5 @@
 from __future__ import annotations
-import gc
-import resource
+import os
 import threading
 import time
 
@@ -36,7 +35,7 @@ from lingoveil_bergamot_preprocess import (
 from lingoveil_llm import LlmTranslationError, LlmTranslator
 from lingoveil_model_manager import validate_seamless_model_dir
 from lingoveil_paths import seamless_model_dir
-from lingoveil_seamless_m4t import SeamlessM4TError, SeamlessM4TTextTranslator
+from lingoveil_seamless_worker import SeamlessM4TError, SeamlessM4TWorkerClient
 from lingoveil_translation_cache import (
     SOURCE_LANG,
     TARGET_LANG,
@@ -90,16 +89,69 @@ class TranslationEngineManager:
 
         self._engine = settings.translation_engine
         self._generation = 1
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         self._bergamot: BergamotTranslatorClient | None = None
-        self._seamless: SeamlessM4TTextTranslator | None = None
+        self._seamless: SeamlessM4TWorkerClient | None = None
         self._llm = LlmTranslator(settings.llm, self._log)
 
         self._preprocessor: BergamotPreprocessor | None = None
         self._stats = EngineStats()
 
         self._closed = False
+        self._idle_timeout_sec = self._read_idle_timeout()
+
+        self._idle_timer: threading.Timer | None = None
+    @staticmethod
+    def _read_idle_timeout() -> float:
+        raw = os.environ.get("LINGOVEIL_ENGINE_IDLE_MINUTES", "2").strip()
+
+        try:
+            minutes = float(raw)
+
+        except ValueError:
+            minutes = 2.0
+        return max(0.0, minutes * 60.0)
+
+    def _touch_activity(self) -> None:
+        if self._idle_timeout_sec <= 0 or self._closed:
+            return
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+
+        self._idle_timer = threading.Timer(self._idle_timeout_sec, self._idle_unload)
+
+        self._idle_timer.name = "lingoveil-engine-idle"
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
+
+    def _idle_unload(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._idle_timer = None
+            if self._bergamot is None and self._seamless is None:
+                return
+            if (
+                (self._bergamot is not None and self._bergamot.busy)
+
+                or (self._seamless is not None and self._seamless.busy)
+
+            ):
+                self._log("Engine-Idle-Limit während eines laufenden Auftrags erreicht")
+
+                self._touch_activity()
+
+                return
+            self._log(
+                f"Engine-Idle-Limit erreicht ({self._idle_timeout_sec / 60:g} min) – "
+                "Modelle werden entladen"
+            )
+
+            self._close_bergamot()
+
+            self._close_seamless_m4t()
+
     @property
     def active_engine(self) -> str:
         return self._engine
@@ -139,76 +191,17 @@ class TranslationEngineManager:
 
             self._bergamot = None
         self._stats.bergamot_status = "nicht gestartet"
-    @staticmethod
-    def _rss_mb() -> float:
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-
-        return usage.ru_maxrss / 1024.0
-    @staticmethod
-    def _vram_mb() -> float:
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                return torch.cuda.memory_allocated() / (1024.0 * 1024.0)
-
-        except Exception:
-            pass
-        return 0.0
     def _seamless_model_path(self) -> Path:
         return seamless_model_dir(self.settings.seamless.model_dir)
 
     def _close_seamless_m4t(self) -> None:
         if self._seamless is not None:
-            ram_before = self._rss_mb()
-
-            vram_before = self._vram_mb()
-
-            self._log("[SeamlessM4T] Unload gestartet")
-
-            self._log(f"[SeamlessM4T] RAM RSS vor close(): {ram_before:.1f} MB")
-
-            self._log(f"[SeamlessM4T] VRAM vor close(): {vram_before:.1f} MB")
+            self._log("[SeamlessM4T] Worker-Unload gestartet")
 
             self._seamless.close()
 
             self._seamless = None
-            self._log("[SeamlessM4T] Manager-Referenz gelöscht")
-
-            collected = gc.collect()
-
-            self._log(f"[SeamlessM4T] gc.collect(): {collected} Objekte")
-
-            cuda_cleared = False
-            try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-                    cuda_cleared = True
-            except Exception:
-                pass
-            if cuda_cleared:
-                self._log("[SeamlessM4T] torch.cuda.empty_cache(): ausgeführt")
-
-            ram_after = self._rss_mb()
-
-            vram_after = self._vram_mb()
-
-            self._log(f"[SeamlessM4T] RAM RSS nach Unload: {ram_after:.1f} MB")
-
-            self._log(f"[SeamlessM4T] VRAM nach Unload: {vram_after:.1f} MB")
-
-            self._log(
-                "[SeamlessM4T] Hinweis: RSS kann durch Python-/PyTorch-Allocator "
-                "reserviert bleiben"
-            )
-
-            self._log(
-                f"SeamlessM4T freigegeben – RAM {ram_before:.0f}→{ram_after:.0f} MB, "
-                f"VRAM {vram_before:.0f}→{vram_after:.0f} MB"
-            )
+            self._log("[SeamlessM4T] Worker beendet; Modell-RAM freigegeben")
 
         self._stats.seamless_m4t_status = "nicht gestartet"
     def _validate_seamless_ready(self) -> Path:
@@ -235,7 +228,7 @@ class TranslationEngineManager:
         self._stats.seamless_m4t_status = "wird geladen"
         self._log(f"SeamlessM4T lazy load: {model_path}")
 
-        self._seamless = SeamlessM4TTextTranslator(
+        self._seamless = SeamlessM4TWorkerClient(
             model_path,
             device_preference=self.settings.seamless.device,
             source_lang=self.settings.seamless.source_lang,
@@ -398,6 +391,9 @@ class TranslationEngineManager:
             if engine == TRANSLATION_ENGINE_LM_STUDIO:
                 self._llm = LlmTranslator(self.settings.llm, self._log)
 
+            if self._bergamot is not None or self._seamless is not None:
+                self._touch_activity()
+
     def ensure_ready(self) -> None:
         with self._lock:
             if self._engine == TRANSLATION_ENGINE_BERGAMOT:
@@ -407,6 +403,8 @@ class TranslationEngineManager:
             elif self._engine == TRANSLATION_ENGINE_SEAMLESS_M4T:
                 if self._seamless is None:
                     self._start_seamless_m4t()
+
+            self._touch_activity()
 
     def translate_blocks(
         self,
@@ -419,6 +417,9 @@ class TranslationEngineManager:
     ) -> list[TranslationBlockResult]:
         if not blocks:
             return []
+        with self._lock:
+            self._touch_activity()
+
         gen_at_start = request_generation if request_generation is not None else self._generation
         if request_generation is not None and gen_at_start != self._generation:
             self._stats.ignored_stale_responses += 1
@@ -710,6 +711,10 @@ class TranslationEngineManager:
         if self._closed:
             return
         self._closed = True
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+
+            self._idle_timer = None
         self._close_bergamot()
 
         self._close_seamless_m4t()

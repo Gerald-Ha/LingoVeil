@@ -49,6 +49,76 @@ class LiveSourceTests(unittest.TestCase):
         for name in ("pyside", "tkinter", "pygobject"):
             self.assertNotIn(name, requirements)
 
+    def test_translation_engines_have_configurable_idle_unload(self):
+        compose = (self.root / "docker-compose.yml").read_text(encoding="utf-8")
+
+        env_example = (self.root / ".env.example").read_text(encoding="utf-8")
+
+        engine = (self.root / "src/lingoveil_translation_engine.py").read_text(
+            encoding="utf-8"
+        )
+
+        worker = (self.root / "src/lingoveil_seamless_worker.py").read_text(
+            encoding="utf-8"
+        )
+
+        worker_main = (
+            self.root / "src/lingoveil_seamless_worker_main.py"
+        ).read_text(encoding="utf-8")
+
+        pipeline = (self.root / "src/lingoveil_browser_pipeline.py").read_text(
+            encoding="utf-8"
+        )
+
+        ocr_worker = (self.root / "src/lingoveil_ocr_worker.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('LINGOVEIL_ENGINE_IDLE_MINUTES:-2', compose)
+
+        self.assertIn("LINGOVEIL_ENGINE_IDLE_MINUTES=2", env_example)
+
+        self.assertIn('get("LINGOVEIL_ENGINE_IDLE_MINUTES", "2")', engine)
+
+        self.assertIn("def _idle_unload", engine)
+
+        self.assertIn("SeamlessM4TWorkerClient", engine)
+
+        self.assertNotIn("from lingoveil_seamless_m4t import", engine)
+
+        self.assertIn("subprocess.Popen", worker)
+
+        self.assertIn(
+            "from lingoveil_seamless_m4t import SeamlessM4TTextTranslator",
+            worker_main,
+        )
+
+        self.assertIn("EasyOcrWorker", pipeline)
+
+        self.assertIn("def _idle_unload_ocr", pipeline)
+
+        self.assertIn("subprocess.Popen", ocr_worker)
+
+        self.assertIn("def _release_idle_memory", pipeline)
+
+        self.assertIn('malloc_trim(0)', pipeline)
+
+        self.assertIn("_page_image_preview_cache.clear()", pipeline)
+
+        self.assertIn("_pdf_preview_cache.clear()", pipeline)
+
+        self.assertIn("OverlayWorker", pipeline)
+
+        self.assertNotIn("from lingoveil_overlay import", pipeline)
+
+        self.assertIn("history.save_translation", pipeline)
+
+        overlay_worker = (self.root / "src/lingoveil_overlay_worker.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("subprocess.Popen", overlay_worker)
+
     def test_access_code_is_kept_in_memory_after_field_is_cleared(self):
         controls = (self.root / "app/live-controls.js").read_text(encoding="utf-8")
 
@@ -363,6 +433,7 @@ class LiveSourceTests(unittest.TestCase):
         self.assertIn('"history_limit": 10', self.source)
 
         self.assertIn("prefetch_count: int = Field(ge=0, le=100)", self.source)
+
         self.assertIn('"prefetch_count": 10', self.source)
 
         self.assertIn("history_limit: int = Field(ge=1, le=100)", self.source)
@@ -754,6 +825,50 @@ class LiveSourceTests(unittest.TestCase):
             self.assertEqual(len(store.list_entries()), 1)
 
             self.assertIsNone(store.get(first["id"]))
+
+    def test_ten_rendered_pages_survive_worker_lifetimes(self):
+        import sys
+
+        sys.path.insert(0, str(self.root / "src"))
+
+        from lingoveil_history import LiveHistoryStore
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            urls = [f"https://example.com/page-{number}.jpg" for number in range(10)]
+            store = LiveHistoryStore(root / "data", root / "cache", limit=10)
+
+            entry = store.touch("https://example.com/chapter", [{"url": url} for url in urls])
+
+            rendered = root / "worker-output.png"
+            rendered.write_bytes(b"\x89PNG\r\n\x1a\nrendered")
+
+            for number, image in enumerate(entry["images"]):
+                store.save_translation(
+                    entry_id=entry["id"],
+                    image_key=image["key"],
+                    engine="bergamot",
+                    original=b"\xff\xd8\xfforiginal",
+                    rendered_path=rendered,
+                    result={
+                        "engine": "bergamot",
+                        "target_language": "de",
+                        "groups": [{"id": "g1", "translation": f"Seite {number + 1}"}],
+                    },
+                )
+
+            reopened = LiveHistoryStore(root / "data", root / "cache", limit=10)
+
+            for number, image in enumerate(entry["images"]):
+                cached = reopened.cached_translation(
+                    entry["id"], image["key"], "bergamot", "de"
+                )
+
+                self.assertIsNotNone(cached)
+
+                self.assertEqual(
+                    cached[0]["groups"][0]["translation"], f"Seite {number + 1}"
+                )
 
     def test_fetch_strategy_is_learned_per_origin_and_gifs_are_blocked(self):
         import sys

@@ -1,4 +1,6 @@
 from __future__ import annotations
+import ctypes
+import gc
 import json
 import os
 import re
@@ -49,14 +51,6 @@ from lingoveil_mangadex import mangadex_chapter_id, resolve_mangadex_chapter
 from lingoveil_manga_catalog import is_supported_manga_url, resolve_manga_catalog
 from lingoveil_mangatown import mangatown_chapter, resolve_mangatown_chapter
 from lingoveil_model_manager import ModelManager, validate_seamless_model_dir
-from lingoveil_overlay import (
-    OVERLAY_MODE_EXACT_GROUP,
-    BubbleOverlayGroupInfo,
-    build_overlay_groups,
-    render_overlay_to_pillow,
-    save_overlay_json,
-)
-
 from lingoveil_paths import (
     browser_artifacts_dir,
     clear_browser_artifacts,
@@ -85,12 +79,13 @@ from lingoveil_translation_engine import (
 )
 
 from lingoveil_ocr_grouping import (
-    EasyOcrEngine,
     GroupedTextBlock,
     group_english_lines,
     process_ocr_raw,
 )
 
+from lingoveil_ocr_worker import EasyOcrWorker
+from lingoveil_overlay_worker import OverlayWorker
 from lingoveil_group_ids import group_id_str
 LogFn = Callable[[str], None]
 class BrowserTranslationPipeline:
@@ -113,7 +108,13 @@ class BrowserTranslationPipeline:
 
         self.session_resolved: dict[str, Any] = {}
 
-        self.ocr_engine: EasyOcrEngine | None = None
+        self.ocr_engine: EasyOcrWorker | None = None
+        self.overlay_worker: OverlayWorker | None = None
+        self._ocr_idle_timeout_sec = TranslationEngineManager._read_idle_timeout()
+
+        self._ocr_idle_timer: threading.Timer | None = None
+        self._ocr_lock = threading.RLock()
+
         self._stored_images: dict[str, Path] = {}
 
         self._stored_pdfs: dict[str, Path] = {}
@@ -459,12 +460,102 @@ class BrowserTranslationPipeline:
         ok, _msg = validate_seamless_model_dir(manager.seamless_path())
 
         return ok
-    def _ensure_ocr_engine(self) -> EasyOcrEngine:
-        if self.ocr_engine is None:
-            self.ocr_engine = EasyOcrEngine(self._log)
+    def _touch_ocr_activity(self) -> None:
+        if self._ocr_idle_timeout_sec <= 0 or self._closed:
+            return
+        if self._ocr_idle_timer is not None:
+            self._ocr_idle_timer.cancel()
+
+        self._ocr_idle_timer = threading.Timer(
+            self._ocr_idle_timeout_sec,
+            self._idle_unload_ocr,
+        )
+
+        self._ocr_idle_timer.name = "lingoveil-ocr-idle"
+        self._ocr_idle_timer.daemon = True
+        self._ocr_idle_timer.start()
+
+    def _idle_unload_ocr(self) -> None:
+        with self._ocr_lock:
+            self._ocr_idle_timer = None
+            if self._closed or (self.ocr_engine is None and self.overlay_worker is None):
+                return
+            if (
+                (self.ocr_engine is not None and self.ocr_engine.busy)
+
+                or (self.overlay_worker is not None and self.overlay_worker.busy)
+
+            ):
+                self._touch_ocr_activity()
+
+                return
+            self._log(f"Bildpipeline-Idle-Limit erreicht ({self._ocr_idle_timeout_sec / 60:g} min)")
+
+            if self.ocr_engine is not None:
+                self.ocr_engine.close()
+
+                self.ocr_engine = None
+            if self.overlay_worker is not None:
+                self.overlay_worker.close()
+
+                self.overlay_worker = None
+            self._release_idle_memory()
+
+    @staticmethod
+    def _current_rss_mb() -> float:
+        try:
+            fields = Path("/proc/self/statm").read_text(encoding="ascii").split()
+
+            return int(fields[1]) * os.sysconf("SC_PAGE_SIZE") / (1024.0 * 1024.0)
+
+        except (OSError, ValueError, IndexError):
+            return 0.0
+    def _release_idle_memory(self) -> None:
+        rss_before = self._current_rss_mb()
+
+        preview_count = len(self._page_image_preview_cache)
+
+        pdf_count = len(self._pdf_preview_cache)
+
+        self._page_image_preview_cache.clear()
+
+        self._pdf_preview_cache.clear()
+
+        collected = gc.collect()
+
+        trimmed = False
+        try:
+            libc = ctypes.CDLL("libc.so.6")
+
+            malloc_trim = libc.malloc_trim
+            malloc_trim.argtypes = [ctypes.c_size_t]
+            malloc_trim.restype = ctypes.c_int
+            trimmed = bool(malloc_trim(0))
+
+        except (AttributeError, OSError):
+            pass
+        rss_after = self._current_rss_mb()
+
+        self._log(
+            "Idle-Speicherbereinigung: "
+            f"Preview-Cache {preview_count}, PDF-Cache {pdf_count}, "
+            f"GC {collected}, malloc_trim={'ja' if trimmed else 'nein'}, "
+            f"RSS {rss_before:.1f}→{rss_after:.1f} MB"
+        )
+
+    def _ensure_ocr_engine(self) -> EasyOcrWorker:
+        with self._ocr_lock:
+            if self.ocr_engine is None:
+                self.ocr_engine = EasyOcrWorker(self._log)
 
         return self.ocr_engine
-    def _wait_for_ocr(self, timeout: float = 180.0) -> EasyOcrEngine:
+    def _ensure_overlay_worker(self) -> OverlayWorker:
+        with self._ocr_lock:
+            if self.overlay_worker is None:
+                self.overlay_worker = OverlayWorker(self._log)
+
+            return self.overlay_worker
+    def _wait_for_ocr(self, timeout: float = 180.0) -> EasyOcrWorker:
         engine = self._ensure_ocr_engine()
 
         if not engine.ready.wait(timeout=timeout):
@@ -473,11 +564,17 @@ class BrowserTranslationPipeline:
         if engine.error:
             raise RuntimeError(f"OCR-Initialisierung fehlgeschlagen: {engine.error}")
 
+        with self._ocr_lock:
+            self._touch_ocr_activity()
+
         return engine
     def _run_ocr(self, image: Image.Image) -> tuple[list, list]:
         engine = self._wait_for_ocr()
 
-        raw = self._run_ocr_preserving_detail(engine, image)
+        with self._ocr_lock:
+            raw = self._run_ocr_preserving_detail(engine, image)
+
+            self._touch_ocr_activity()
 
         run_no = 1
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -737,70 +834,50 @@ class BrowserTranslationPipeline:
         image: Image.Image,
         groups: list,
         translations: dict[str, dict[str, str]],
-    ) -> tuple[Image.Image, list[BubbleOverlayGroupInfo]]:
-        grouped_input: list[tuple[str, tuple[float, float, float, float], str, str, str, str, str]] = []
+    ) -> tuple[Path, list[dict[str, Any]]]:
+        grouped_input: list[list[Any]] = []
         for group in groups:
             gid = group_id_str(group.id)
 
             tr = translations.get(gid, {})
 
             grouped_input.append(
-                (
+                [
                     gid,
-                    group.bbox,
+                    list(group.bbox),
                     group.text,
                     tr.get("german", ""),
                     tr.get("status", "übersetzt" if tr.get("german") else "wird übersetzt"),
                     tr.get("cache_source", ""),
                     self.engine_manager.active_engine,
-                )
-
+                ]
             )
 
-        infos = build_overlay_groups(
+        request_id = uuid.uuid4().hex
+        input_path = self.session_dir / f"overlay-{request_id}-input.png"
+        output_path = self.session_dir / f"overlay-{request_id}-rendered.png"
+        save_image_copy(image, input_path)
+
+        worker = self._ensure_overlay_worker()
+
+        infos = worker.render(
+            input_path=input_path,
+            output_path=output_path,
             grouped=grouped_input,
-            roi_size=(image.width, image.height),
-            gui_display_mode=OVERLAY_MODE_EXACT_GROUP,
         )
 
-        rendered = render_overlay_to_pillow(
-            image,
-            infos,
-            display_mode=OVERLAY_MODE_EXACT_GROUP,
-        )
+        input_path.unlink(missing_ok=True)
 
-        return rendered, infos
-    def _serialize_groups(self, infos: list[BubbleOverlayGroupInfo]) -> list[dict[str, Any]]:
-        payload: list[dict[str, Any]] = []
-        for info in infos:
-            payload.append(
-                {
-                    "id": info.group_id,
-                    "ocr_bbox": list(info.roi_bbox),
-                    "group_bbox": list(info.group_bbox or info.roi_bbox),
-                    "render_bbox": list(info.render_bbox),
-                    "text_bbox": list(info.text_bbox),
-                    "bbox_unchanged": info.bbox_unchanged,
-                    "ocr_text": info.ocr_text,
-                    "translation": info.translated_text,
-                    "display_text": info.display_text,
-                    "font_size": info.font_size,
-                    "line_count": info.line_count,
-                    "fits": info.fits,
-                    "occupancy_ratio": info.occupancy_ratio,
-                    "overflow_reason": info.overflow_reason,
-                    "render_mode": info.render_mode,
-                }
+        with self._ocr_lock:
+            self._touch_ocr_activity()
 
-            )
-
-        return payload
+        return output_path, infos
     def _save_artifacts(
         self,
         *,
         source_image: Image.Image,
-        rendered_image: Image.Image,
-        infos: list[BubbleOverlayGroupInfo],
+        rendered_image: Path,
+        infos: list[dict[str, Any]],
         engine_name: str,
         extra: dict[str, Any] | None = None,
         pdf_page: bool = False,
@@ -810,7 +887,7 @@ class BrowserTranslationPipeline:
         json_path = self.artifacts_dir / "browser_latest.json"
         save_image_copy(source_image, input_path)
 
-        save_image_copy(rendered_image, rendered_path)
+        shutil.copyfile(rendered_image, rendered_path)
 
         if pdf_page:
             save_image_copy(source_image, self.artifacts_dir / "browser_pdf_page_latest.png")
@@ -822,7 +899,7 @@ class BrowserTranslationPipeline:
             "engine_display_name": engine_display_name(engine_name),
             "render_mode": "exact_group_bbox",
             "session_id": self.session_id,
-            "groups": self._serialize_groups(infos),
+            "groups": infos,
             "request_counters": {
                 "bergamot": stats.bergamot_requests,
                 "seamless_m4t": stats.seamless_m4t_requests,
@@ -831,7 +908,7 @@ class BrowserTranslationPipeline:
             "cache_hits": {
                 "session": len(self.session_resolved),
                 "persistent": sum(
-                    1 for g in infos if g.cache_source == "persistent_cache"
+                    1 for g in infos if g.get("cache_source") == "persistent_cache"
                 ),
             },
         }
@@ -839,7 +916,7 @@ class BrowserTranslationPipeline:
         if extra:
             payload.update(extra)
 
-        save_overlay_json(json_path, payload)
+        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
         return {
             "input_image_path": str(input_path),
@@ -863,11 +940,13 @@ class BrowserTranslationPipeline:
             engine_name=engine_name,
         )
 
+        rendered.unlink(missing_ok=True)
+
         return {
             "engine": engine_name,
             "target_language": self._target_language(engine_name),
             "engine_display_name": engine_display_name(engine_name),
-            "groups": self._serialize_groups(infos),
+            "groups": infos,
             "rendered_image_path": paths.get("rendered_image_path", ""),
             "input_image_path": paths.get("input_image_path", ""),
             "json_path": paths.get("json_path", ""),
@@ -940,11 +1019,13 @@ class BrowserTranslationPipeline:
             pdf_page=True,
         )
 
+        rendered.unlink(missing_ok=True)
+
         return {
             "engine": engine_name,
             "page_number": page_number,
             "page_count": pdf_page_count(pdf_path),
-            "groups": self._serialize_groups(infos),
+            "groups": infos,
             "rendered_image_path": paths["rendered_image_path"],
             "input_image_path": paths["input_image_path"],
             "json_path": paths["json_path"],
@@ -1644,6 +1725,19 @@ class BrowserTranslationPipeline:
         if self._closed:
             return
         self._closed = True
+        with self._ocr_lock:
+            if self._ocr_idle_timer is not None:
+                self._ocr_idle_timer.cancel()
+
+                self._ocr_idle_timer = None
+            if self.ocr_engine is not None:
+                self.ocr_engine.close()
+
+                self.ocr_engine = None
+            if self.overlay_worker is not None:
+                self.overlay_worker.close()
+
+                self.overlay_worker = None
         try:
             self.engine_manager.close()
 

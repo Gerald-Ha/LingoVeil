@@ -554,6 +554,7 @@ Für die meisten Installationen reichen die Standardwerte aus.
 | `LINGOVEIL_SMTP_*` | leer | optionale E-Mail-Konfiguration |
 | `LINGOVEIL_PUBLIC_URL` | leer | öffentliche URL für Links in E-Mails |
 | `LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED` | `false` | lokale LanguageTool-Korrektur für Bergamot |
+| `LINGOVEIL_ENGINE_IDLE_MINUTES` | `2` | EasyOCR, Bergamot und Seamless nach dieser Leerlaufzeit entladen; `0` deaktiviert den Timer |
 | `update` | `true` | automatische Update-Prüfung |
 
 </details>
@@ -633,4 +634,3 @@ Bei Problemen sollten zuerst geprüft werden:
 - stehen genügend RAM beziehungsweise GPU-Speicher zur Verfügung?
 
 ---
-

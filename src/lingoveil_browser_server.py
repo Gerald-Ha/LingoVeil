@@ -25,7 +25,7 @@ from lingoveil_config import (
 )
 
 from lingoveil_image_pipeline import SizeLimitError, UrlSecurityError
-from lingoveil_seamless_m4t import SeamlessM4TError
+from lingoveil_seamless_worker import SeamlessM4TError
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = PROJECT_ROOT / "web"
 DEFAULT_PORT = DEFAULT_BROWSER_PORT
