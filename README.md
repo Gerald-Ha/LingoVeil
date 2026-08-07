@@ -28,6 +28,8 @@ LingoVeil can process individual images and PDFs, load websites, and provides a 
   </tr>
 </table>
 
+<img width="800" height="auto" alt="Dashboard" src="https://github.com/user-attachments/assets/9eae4834-23bf-42e1-bc42-5adcbd2d844f" />
+
 
 ---
 
