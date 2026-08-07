@@ -9,6 +9,22 @@ LingoVeil is not only intended for technically experienced users, but especially
 
 LingoVeil can process individual images and PDFs, load websites, and provides a dedicated reading mode for selected manga sites with chapters, bookmarks, and reading progress.
 
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/11d06c31-6358-4688-9105-0e2ec97edc60" target="_blank">
+        <img width="600" alt="translate1" src="https://github.com/user-attachments/assets/11d06c31-6358-4688-9105-0e2ec97edc60" />
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/82dee316-9406-43eb-9d97-83e2722db473" target="_blank">
+        <img width="600" alt="translate2" src="https://github.com/user-attachments/assets/82dee316-9406-43eb-9d97-83e2722db473" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+
 ---
 
 ## Why LingoVeil?
@@ -159,6 +175,17 @@ The administrator also manages installed models and the optional LM Studio conne
 
 ---
 ## Smartphone and Tablet
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" target="_blank">
+        <img height="500" alt="translate2" src="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" />
+      </a>
+    </td>
+  </tr>
+</table>
+
 
 LingoVeil has a **responsive user interface** that automatically adapts to smaller displays. This means LingoVeil can be used comfortably not only on desktop computers, but also on **smartphones and tablets**.
 
