@@ -27,6 +27,8 @@ LingoVeil kann einzelne Bilder und PDFs verarbeiten, Webseiten laden und bietet 
   </tr>
 </table>
 
+<img width="800" height="auto" alt="Dashboard" src="https://github.com/user-attachments/assets/9eae4834-23bf-42e1-bc42-5adcbd2d844f" />
+
 ---
 
 ## Warum LingoVeil?
