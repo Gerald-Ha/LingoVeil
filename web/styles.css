@@ -727,6 +727,12 @@ input[type="file"] {
   text-decoration: none;
 }
 
+.app-info-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 @media (max-width: 600px) {
   .live-dialog {
     padding: 16px;

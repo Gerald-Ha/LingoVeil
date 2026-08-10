@@ -1754,9 +1754,11 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn('"Check-Update"', controls)
 
-        self.assertIn('releaseNotesLink.textContent = tr("Release Notes öffnen")', controls)
+        self.assertIn('releaseNotesLink.textContent = tr("Release Notes")', controls)
 
         self.assertIn("releaseNotesLink.href = result.notes_url", controls)
+
+        self.assertIn("updateActions.append(updateLink, releaseNotesLink)", controls)
 
         self.assertIn("contact@gerald-hasani.com", controls)
 
