@@ -1,13 +1,18 @@
 from __future__ import annotations
+import os
+
 from dataclasses import dataclass, replace
 from pathlib import Path
+from lingoveil_ollama import OllamaSettings
 TRANSLATION_ENGINE_BERGAMOT = "bergamot"
 TRANSLATION_ENGINE_SEAMLESS_M4T = "seamless_m4t"
 TRANSLATION_ENGINE_LM_STUDIO = "lm_studio"
+TRANSLATION_ENGINE_OLLAMA = "ollama"
 SUPPORTED_TRANSLATION_ENGINES = {
     TRANSLATION_ENGINE_BERGAMOT,
     TRANSLATION_ENGINE_SEAMLESS_M4T,
     TRANSLATION_ENGINE_LM_STUDIO,
+    TRANSLATION_ENGINE_OLLAMA,
 }
 
 DEFAULT_TRANSLATION_ENGINE = TRANSLATION_ENGINE_BERGAMOT
@@ -63,6 +68,7 @@ class BrowserSettings:
 class TranslationSettings:
     translation_engine: str
     llm: LlmSettings
+    ollama: OllamaSettings
     bergamot: BergamotSettings
     seamless: SeamlessM4TSettings
     preprocess: BergamotPreprocessSettings
@@ -123,6 +129,30 @@ def load_llm_settings(env_path: Path) -> LlmSettings:
     timeout_sec = _parse_float(env.get("LINGOVEIL_LLM_TIMEOUT_SEC", "120"), 120.0)
 
     return LlmSettings(base_url=base_url, model=model, timeout_sec=timeout_sec)
+
+def load_ollama_settings(env_path: Path) -> OllamaSettings:
+    env = load_env_file(env_path)
+
+    return OllamaSettings(
+        base_url=os.environ.get("LINGOVEIL_OLLAMA_BASE_URL", env.get(
+            "LINGOVEIL_OLLAMA_BASE_URL", "http://host.docker.internal:11435"
+        )
+
+        ).strip().rstrip("/"),
+        model=os.environ.get("LINGOVEIL_OLLAMA_MODEL", env.get(
+            "LINGOVEIL_OLLAMA_MODEL", "translategemma:4b"
+        )).strip(),
+        timeout_sec=_parse_float(os.environ.get(
+            "LINGOVEIL_OLLAMA_TIMEOUT_SEC", env.get("LINGOVEIL_OLLAMA_TIMEOUT_SEC", "120")
+
+        ), 120.0),
+        keep_alive=os.environ.get("LINGOVEIL_OLLAMA_KEEP_ALIVE", env.get(
+            "LINGOVEIL_OLLAMA_KEEP_ALIVE", "2m"
+        )).strip() or "2m",
+        bridge_token=os.environ.get("LINGOVEIL_OLLAMA_BRIDGE_TOKEN", env.get(
+            "LINGOVEIL_OLLAMA_BRIDGE_TOKEN", ""
+        )).strip(),
+    )
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -222,6 +252,8 @@ def load_translation_settings(env_path: Path) -> TranslationSettings:
 
     llm = load_llm_settings(env_path)
 
+    ollama = load_ollama_settings(env_path)
+
     bergamot = BergamotSettings(
         node_bin=env.get("LINGOVEIL_BERGAMOT_NODE_BIN", "node"),
         timeout_sec=_parse_float(
@@ -238,6 +270,7 @@ def load_translation_settings(env_path: Path) -> TranslationSettings:
     return TranslationSettings(
         translation_engine=engine,
         llm=llm,
+        ollama=ollama,
         bergamot=bergamot,
         seamless=seamless,
         preprocess=preprocess,

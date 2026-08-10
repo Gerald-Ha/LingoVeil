@@ -22,7 +22,7 @@ from core.model_manager import AppModelManager, ModelManagerError
 from lingoveil_browser_pipeline import BrowserTranslationPipeline
 from lingoveil_browser_server import create_app
 from lingoveil_bookmarks import DatabaseMangaBookmarkStore
-from lingoveil_config import SUPPORTED_TRANSLATION_ENGINES
+from lingoveil_config import LlmSettings, SUPPORTED_TRANSLATION_ENGINES
 from lingoveil_database import AuthService, Database, UserDataStore
 from lingoveil_history import DatabaseLiveHistoryStore
 from lingoveil_jobs import FairTranslationQueue
@@ -33,6 +33,15 @@ from lingoveil_model_manager import (
 
 from lingoveil_notifications import ChapterNotificationMailer
 from lingoveil_translation_cache import engine_display_name
+from lingoveil_llm import LlmTranslator
+from lingoveil_ollama import (
+    OllamaSettings,
+    OllamaTranslationError,
+    OllamaTranslator,
+    ollama_model_capabilities,
+    ollama_supported_lingoveil_languages,
+)
+
 from lingoveil_update import APP_VERSION, UpdateChecker
 VERSION = APP_VERSION
 DATA_DIR = Path(os.environ.get("LINGOVEIL_LIVE_DATA_DIR", "/app/data")).resolve()
@@ -58,6 +67,12 @@ DEFAULTS: dict[str, Any] = {
     "lm_studio_base_url": "",
     "lm_studio_model": "",
     "lm_studio_timeout_sec": 120,
+    "ollama_base_url": "http://host.docker.internal:11435",
+    "ollama_model": "translategemma:4b",
+    "ollama_timeout_sec": 120,
+    "ollama_keep_alive": "2m",
+    "ollama_status": "NOT_TESTED",
+    "ollama_last_error": "",
     "seamless_device": "auto",
     "seamless_license_accepted": False,
     "overlay_mode": "exact_group_bbox",
@@ -81,6 +96,8 @@ SEAMLESS_TARGET_LANGUAGES = {
 BERGAMOT_TARGET_LANGUAGES = {
     "bul", "ces", "deu", "spa", "est", "fra", "ita", "por", "rus", "ukr",
 }
+
+OLLAMA_STATUSES = {"NOT_CONFIGURED", "NOT_TESTED", "AVAILABLE", "UNAVAILABLE"}
 
 def _paths() -> AppPaths:
     return AppPaths(
@@ -124,7 +141,17 @@ def load_settings() -> tuple[dict[str, Any], str | None]:
     try:
         raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
 
-        return validate_settings({**DEFAULTS, **raw}), None
+        merged = {**DEFAULTS, **raw}
+
+        if (
+            os.environ.get("LINGOVEIL_OLLAMA_BRIDGE_TOKEN", "").strip()
+
+            and merged.get("ollama_base_url") == "http://host.docker.internal:11434"
+        ):
+            merged["ollama_base_url"] = "http://host.docker.internal:11435"
+            merged["ollama_status"] = "NOT_TESTED"
+            merged["ollama_last_error"] = ""
+        return validate_settings(merged), None
     except Exception as exc:
         return dict(DEFAULTS), f"Beschädigte Konfiguration; sichere Standardwerte aktiv: {exc}"
 def validate_settings(raw: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +180,11 @@ def validate_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if value["engine"] == "lm_studio" and value["target_language"] != "deu":
         raise ValueError("LM Studio ist derzeit nur für die Zielsprache Deutsch konfiguriert")
 
+    ollama_languages = set(ollama_supported_lingoveil_languages(str(value["ollama_model"])))
+
+    if value["engine"] == "ollama" and ollama_languages and value["target_language"] not in ollama_languages:
+        raise ValueError("Diese Zielsprache wird vom ausgewählten Ollama-Modell nicht unterstützt")
+
     value["prefetch_count"] = int(value["prefetch_count"])
 
     if not 0 <= value["prefetch_count"] <= 100:
@@ -180,6 +212,11 @@ def validate_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if not 1 <= value["lm_studio_timeout_sec"] <= 600:
         raise ValueError("LM-Studio-Timeout muss zwischen 1 und 600 Sekunden liegen")
 
+    value["ollama_timeout_sec"] = float(value["ollama_timeout_sec"])
+
+    if not 1 <= value["ollama_timeout_sec"] <= 600:
+        raise ValueError("Ollama-Timeout muss zwischen 1 und 600 Sekunden liegen")
+
     if value["seamless_device"] not in {"auto", "cpu", "cuda"}:
         raise ValueError("Gerät muss auto, cpu oder cuda sein")
 
@@ -204,6 +241,27 @@ def validate_settings(raw: dict[str, Any]) -> dict[str, Any]:
     value["lm_studio_model"] = str(value["lm_studio_model"]).strip()
 
     value["lm_studio_base_url"] = str(value["lm_studio_base_url"]).strip().rstrip("/")
+
+    value["ollama_base_url"] = str(value["ollama_base_url"]).strip().rstrip("/")
+
+    value["ollama_model"] = str(value["ollama_model"]).strip()
+
+    value["ollama_keep_alive"] = str(value["ollama_keep_alive"]).strip()
+
+    value["ollama_last_error"] = str(value.get("ollama_last_error", ""))[:1000]
+    value["ollama_status"] = str(value.get("ollama_status", "NOT_TESTED"))
+
+    if value["ollama_status"] not in OLLAMA_STATUSES:
+        value["ollama_status"] = "NOT_TESTED"
+    ollama_configured = bool(value["ollama_base_url"] and value["ollama_model"])
+
+    if not ollama_configured:
+        value["ollama_status"] = "NOT_CONFIGURED"
+    elif not value["ollama_base_url"].startswith(("http://", "https://")):
+        raise ValueError("Ollama-Basis-URL muss http/https verwenden")
+
+    if not value["ollama_keep_alive"]:
+        raise ValueError("Ollama Keep-Alive darf nicht leer sein")
 
     lm_studio_partially_configured = bool(
         value["lm_studio_base_url"] or value["lm_studio_model"]
@@ -247,6 +305,16 @@ class SettingsBody(BaseModel):
 
     lm_studio_timeout_sec: float = Field(ge=1, le=600)
 
+    ollama_base_url: str = Field(max_length=500)
+
+    ollama_model: str = Field(max_length=200)
+
+    ollama_timeout_sec: float = Field(ge=1, le=600)
+
+    ollama_keep_alive: str = Field(min_length=1, max_length=50)
+
+    ollama_status: str = "NOT_TESTED"
+    ollama_last_error: str = ""
     seamless_device: str
     seamless_license_accepted: bool
     overlay_mode: str
@@ -254,6 +322,16 @@ class SettingsBody(BaseModel):
     show_debug_areas: bool
 class EngineSelectionBody(BaseModel):
     engine: str
+class LlmConnectionTestBody(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+
+    model: str = Field(min_length=1, max_length=200)
+
+    timeout_sec: float = Field(ge=1, le=600)
+
+class OllamaConnectionBody(LlmConnectionTestBody):
+    keep_alive: str = Field(min_length=1, max_length=50)
+
 class AccountUpdateBody(BaseModel):
     username: str = Field(min_length=3, max_length=64)
 
@@ -305,6 +383,14 @@ def build_app():
 
     pipeline = BrowserTranslationPipeline(log_fn=lambda m: print(f"[LingoVeil Live] {m}", flush=True))
 
+    def mark_ollama_unavailable(reason: str) -> None:
+        current, _warning = load_settings()
+
+        current["ollama_status"] = "UNAVAILABLE"
+        current["ollama_last_error"] = reason
+        _atomic_json(SETTINGS_FILE, validate_settings(current))
+
+    pipeline.ollama_unavailable_callback = mark_ollama_unavailable
     pipeline.apply_live_settings(settings)
 
     database = Database(os.environ.get("LINGOVEIL_DATABASE_URL", ""))
@@ -408,7 +494,7 @@ def build_app():
                 flush=True,
             )
 
-            retry_seconds = 60 if result["status"] == "error" else 24 * 60 * 60
+            retry_seconds = 60 if result["status"] == "error" else 6 * 60 * 60
             update_check_stop.wait(retry_seconds)
 
     @app.on_event("startup")
@@ -631,19 +717,150 @@ def build_app():
         if not user["is_admin"]:
             current["lm_studio_base_url"] = ""
             current["lm_studio_model"] = ""
+            current["ollama_base_url"] = ""
         if not mailer.configured:
             current["chapter_email_notifications"] = False
         return {
             "settings": current,
             "warning": warning,
             "user": user,
-            "capabilities": {"smtp_configured": mailer.configured},
+            "capabilities": {
+                "smtp_configured": mailer.configured,
+                "translation_engines": {
+                    "bergamot": sorted(BERGAMOT_TARGET_LANGUAGES),
+                    "seamless_m4t": sorted(SEAMLESS_TARGET_LANGUAGES),
+                    "lm_studio": ["deu"],
+                    "ollama": ollama_supported_lingoveil_languages(
+                        current["ollama_model"]
+                    ),
+                },
+                "ollama_model": ollama_model_capabilities(current["ollama_model"]),
+            },
         }
 
     @app.get("/api/app-update")
 
     def app_update(force: bool = False) -> dict[str, Any]:
         return update_checker.check(force=force)
+
+    @app.post("/api/lm-studio/test")
+
+    def test_lm_studio(
+        body: LlmConnectionTestBody,
+        _: dict[str, Any] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        translator = LlmTranslator(
+            LlmSettings(
+                base_url=body.base_url.strip().rstrip("/"),
+                model=body.model.strip(),
+                timeout_sec=body.timeout_sec,
+            ),
+            lambda message: print(f"[LM Studio Test] {message}", flush=True),
+        )
+
+        try:
+            result = translator.translate_blocks(
+                [{"id": "TEST", "text": "Hello!"}], max_chars=100, max_blocks=1
+            )
+
+            return {
+                "available": True,
+                "translation": result.items[0].german if result.items else "",
+                "duration_sec": result.duration_sec,
+            }
+
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    @app.get("/api/ollama/models")
+
+    def ollama_models(
+        base_url: str,
+        timeout_sec: float = 120,
+        _: dict[str, Any] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        client = OllamaTranslator(
+            OllamaSettings(
+                base_url=base_url.strip().rstrip("/"),
+                model="translategemma:4b",
+                timeout_sec=timeout_sec,
+                keep_alive="2m",
+                bridge_token=os.environ.get("LINGOVEIL_OLLAMA_BRIDGE_TOKEN", ""),
+            )
+
+        )
+
+        try:
+            return {"models": client.list_models()}
+
+        except OllamaTranslationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        finally:
+            client.close()
+
+    @app.post("/api/ollama/test")
+
+    def test_ollama(
+        body: OllamaConnectionBody,
+        _: dict[str, Any] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        settings = OllamaSettings(
+            base_url=body.base_url.strip().rstrip("/"),
+            model=body.model.strip(),
+            timeout_sec=body.timeout_sec,
+            keep_alive=body.keep_alive.strip(),
+            bridge_token=os.environ.get("LINGOVEIL_OLLAMA_BRIDGE_TOKEN", ""),
+        )
+
+        client = OllamaTranslator(
+            settings,
+            lambda message: print(f"[Ollama Test] {message}", flush=True),
+        )
+
+        try:
+            result = client.test_connection()
+
+        except OllamaTranslationError as exc:
+            current, _warning = load_settings()
+
+            current.update({
+                "ollama_base_url": settings.base_url,
+                "ollama_model": settings.model,
+                "ollama_timeout_sec": settings.timeout_sec,
+                "ollama_keep_alive": settings.keep_alive,
+                "ollama_status": "UNAVAILABLE",
+                "ollama_last_error": str(exc),
+            })
+
+            _atomic_json(SETTINGS_FILE, validate_settings(current))
+
+            pipeline.apply_live_settings(current)
+
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        finally:
+            client.close()
+
+        current, _warning = load_settings()
+
+        current.update({
+            "ollama_base_url": settings.base_url,
+            "ollama_model": settings.model,
+            "ollama_timeout_sec": settings.timeout_sec,
+            "ollama_keep_alive": settings.keep_alive,
+            "ollama_status": "AVAILABLE",
+            "ollama_last_error": "",
+        })
+
+        current = validate_settings(current)
+
+        _atomic_json(SETTINGS_FILE, current)
+
+        pipeline.apply_live_settings(current)
+
+        return {
+            **result,
+            "status": "AVAILABLE",
+            "model_capabilities": ollama_model_capabilities(settings.model),
+        }
 
     @app.put("/api/account")
 
@@ -680,6 +897,25 @@ def build_app():
                 )
 
             if user["is_admin"]:
+                previous, _warning = load_settings()
+
+                config_changed = any(
+                    incoming[key] != previous[key]
+                    for key in (
+                        "ollama_base_url", "ollama_model", "ollama_timeout_sec",
+                        "ollama_keep_alive",
+                    )
+
+                )
+
+                incoming["ollama_status"] = (
+                    "NOT_TESTED" if config_changed else previous["ollama_status"]
+                )
+
+                incoming["ollama_last_error"] = (
+                    "" if config_changed else previous["ollama_last_error"]
+                )
+
                 current = validate_settings(incoming)
 
                 _atomic_json(SETTINGS_FILE, current)
@@ -690,6 +926,8 @@ def build_app():
                 for key in (
                     "lm_studio_base_url", "lm_studio_model", "lm_studio_timeout_sec",
                     "seamless_device", "seamless_license_accepted",
+                    "ollama_base_url", "ollama_model", "ollama_timeout_sec",
+                    "ollama_keep_alive", "ollama_status", "ollama_last_error",
                 ):
                     incoming[key] = system[key]
                 current = validate_settings(incoming)
@@ -719,6 +957,12 @@ def build_app():
             raise HTTPException(status_code=403, detail="LM Studio ist nur für Administratoren verfügbar")
 
         current, _warning = load_settings()
+
+        if body.engine == "ollama" and current["ollama_status"] != "AVAILABLE":
+            raise HTTPException(
+                status_code=409,
+                detail="Ollama muss zuerst unter Optionen → Modelle erfolgreich getestet werden",
+            )
 
         current["engine"] = body.engine
         try:
@@ -948,6 +1192,19 @@ def build_app():
                 "available": available,
                 "reason": "" if available else "LM Studio ist noch nicht konfiguriert.",
                 "fallback": "bergamot",
+            }
+
+        if engine_name == "ollama":
+            current, _warning = load_settings()
+
+            status = current["ollama_status"]
+            return {
+                "engine": engine_name,
+                "available": status == "AVAILABLE",
+                "status": status,
+                "reason": current["ollama_last_error"] if status == "UNAVAILABLE" else "",
+                "model": current["ollama_model"],
+                "model_capabilities": ollama_model_capabilities(current["ollama_model"]),
             }
 
         if engine_name != "seamless_m4t":

@@ -13,6 +13,7 @@ from lingoveil_config import (
     SUPPORTED_TRANSLATION_ENGINES,
     TRANSLATION_ENGINE_BERGAMOT,
     TRANSLATION_ENGINE_LM_STUDIO,
+    TRANSLATION_ENGINE_OLLAMA,
     TRANSLATION_ENGINE_SEAMLESS_M4T,
     BergamotPreprocessSettings,
     BergamotSettings,
@@ -33,6 +34,12 @@ from lingoveil_bergamot_preprocess import (
 )
 
 from lingoveil_llm import LlmTranslationError, LlmTranslator
+from lingoveil_ollama import (
+    OLLAMA_PROMPT_VERSION,
+    OllamaTranslationError,
+    OllamaTranslator,
+)
+
 from lingoveil_model_manager import validate_seamless_model_dir
 from lingoveil_paths import seamless_model_dir
 from lingoveil_seamless_worker import SeamlessM4TError, SeamlessM4TWorkerClient
@@ -63,6 +70,7 @@ class EngineStats:
     bergamot_requests: int = 0
     seamless_m4t_requests: int = 0
     lm_studio_requests: int = 0
+    ollama_requests: int = 0
     engine_switches: int = 0
     ignored_stale_responses: int = 0
     bergamot_status: str = "nicht gestartet"
@@ -83,6 +91,7 @@ class TranslationEngineManager:
         self,
         settings: TranslationSettings,
         log_fn: Callable[[str], None] | None = None,
+        ollama_unavailable_fn: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
         self._log = log_fn or (lambda msg: print(msg, flush=True))
@@ -94,6 +103,11 @@ class TranslationEngineManager:
         self._bergamot: BergamotTranslatorClient | None = None
         self._seamless: SeamlessM4TWorkerClient | None = None
         self._llm = LlmTranslator(settings.llm, self._log)
+
+        self._ollama_unavailable_fn = ollama_unavailable_fn
+        self._ollama = OllamaTranslator(
+            settings.ollama, self._log, unavailable_fn=ollama_unavailable_fn
+        )
 
         self._preprocessor: BergamotPreprocessor | None = None
         self._stats = EngineStats()
@@ -265,14 +279,38 @@ class TranslationEngineManager:
 
     def prepare_block(self, ocr_text: str) -> PreparedBlock:
         pass
-        if self._engine == TRANSLATION_ENGINE_LM_STUDIO:
+        if self._engine in (TRANSLATION_ENGINE_LM_STUDIO, TRANSLATION_ENGINE_OLLAMA):
+            model = (
+                self.settings.ollama.model
+                if self._engine == TRANSLATION_ENGINE_OLLAMA
+                else self.settings.llm.model
+            )
+
+            source_lang = (
+                self.settings.seamless.source_lang
+                if self._engine == TRANSLATION_ENGINE_OLLAMA
+                else SOURCE_LANG
+            )
+
+            target_lang = (
+                self.settings.seamless.target_lang
+                if self._engine == TRANSLATION_ENGINE_OLLAMA
+                else TARGET_LANG
+            )
+
+            prompt_version = (
+                OLLAMA_PROMPT_VERSION
+                if self._engine == TRANSLATION_ENGINE_OLLAMA
+                else TRANSLATION_PROMPT_VERSION
+            )
+
             key = build_cache_key(
                 ocr_text,
-                SOURCE_LANG,
-                TARGET_LANG,
-                self.settings.llm.model,
-                TRANSLATION_PROMPT_VERSION,
-                translation_engine=TRANSLATION_ENGINE_LM_STUDIO,
+                source_lang,
+                target_lang,
+                model,
+                prompt_version,
+                translation_engine=self._engine,
             )
 
             return PreparedBlock(
@@ -373,7 +411,7 @@ class TranslationEngineManager:
             if old_engine == TRANSLATION_ENGINE_SEAMLESS_M4T:
                 self._close_seamless_m4t()
 
-            if engine == TRANSLATION_ENGINE_LM_STUDIO:
+            if engine in (TRANSLATION_ENGINE_LM_STUDIO, TRANSLATION_ENGINE_OLLAMA):
                 self._shutdown_preprocess_languagetool()
 
             if engine == TRANSLATION_ENGINE_BERGAMOT:
@@ -682,6 +720,71 @@ class TranslationEngineManager:
 
                 for item in response.items
             ]
+        if engine == TRANSLATION_ENGINE_OLLAMA:
+            self._stats.ollama_requests += 1
+            try:
+                batches: list[list[dict]] = []
+                batch: list[dict] = []
+                batch_chars = 0
+                char_limit = min(max_chars, 1500)
+
+                block_limit = min(max_blocks, 10)
+
+                for block in blocks:
+                    block_chars = len(str(block.get("text", "")))
+
+                    if batch and (
+                        len(batch) >= block_limit or batch_chars + block_chars > char_limit
+                    ):
+                        batches.append(batch)
+
+                        batch = []
+                        batch_chars = 0
+                    batch.append(block)
+
+                    batch_chars += block_chars
+                if batch:
+                    batches.append(batch)
+
+                ollama_items = []
+                duration_sec = 0.0
+                for ollama_batch in batches:
+                    response = self._ollama.translate_blocks(
+                        ollama_batch,
+                        source_lang=self.settings.seamless.source_lang,
+                        target_lang=self.settings.seamless.target_lang,
+                        max_chars=char_limit,
+                        max_blocks=block_limit,
+                    )
+
+                    ollama_items.extend(response.items)
+
+                    duration_sec += response.duration_sec
+            except OllamaTranslationError as exc:
+                self._stats.last_error = str(exc)
+
+                raise
+            if gen_at_start != self._generation:
+                self._stats.ignored_stale_responses += 1
+                self._log(
+                    f"Verspätete Ollama-Antwort ignoriert "
+                    f"(Generation {gen_at_start} → {self._generation})"
+                )
+
+                return []
+            return [
+                TranslationBlockResult(
+                    block_id=item.block_id,
+                    translation=item.translation,
+                    corrected_source=next(
+                        (b["text"] for b in blocks if b["id"] == item.block_id), ""
+                    ),
+                    engine=TRANSLATION_ENGINE_OLLAMA,
+                    duration_sec=duration_sec,
+                )
+
+                for item in ollama_items
+            ]
         raise ValueError(f"Unbekannte Engine: {engine}")
 
     def update_settings(self, settings: TranslationSettings) -> None:
@@ -690,6 +793,8 @@ class TranslationEngineManager:
         old_preprocess = self.settings.preprocess
         self.settings = settings
         self._llm.settings = settings.llm
+        self._ollama.update_settings(settings.ollama)
+
         if old_bergamot != settings.bergamot:
             self._close_bergamot()
 
@@ -719,22 +824,28 @@ class TranslationEngineManager:
 
         self._close_seamless_m4t()
 
+        self._ollama.close()
+
         if self._preprocessor is not None:
             if hasattr(self._preprocessor, "close"):
                 self._preprocessor.close()
 
             self._preprocessor = None
-def engine_cache_model(engine: str, llm_model: str) -> str:
+def engine_cache_model(engine: str, llm_model: str, ollama_model: str = "") -> str:
     if engine == TRANSLATION_ENGINE_BERGAMOT:
         return BERGAMOT_MODEL_VARIANT
     if engine == TRANSLATION_ENGINE_SEAMLESS_M4T:
         return SEAMLESS_M4T_MODEL_VARIANT
+    if engine == TRANSLATION_ENGINE_OLLAMA:
+        return ollama_model
     return llm_model
 def engine_cache_prompt_version(engine: str) -> str:
     if engine == TRANSLATION_ENGINE_BERGAMOT:
         return BERGAMOT_PROMPT_VERSION
     if engine == TRANSLATION_ENGINE_SEAMLESS_M4T:
         return SEAMLESS_M4T_PROMPT_VERSION
+    if engine == TRANSLATION_ENGINE_OLLAMA:
+        return OLLAMA_PROMPT_VERSION
     return TRANSLATION_PROMPT_VERSION
 def run_self_test() -> int:
     pass
@@ -1083,9 +1194,11 @@ def _default_seamless_settings(**overrides: Any) -> SeamlessM4TSettings:
 
 def _base_test_settings() -> TranslationSettings:
     from lingoveil_config import BrowserSettings
+    from lingoveil_ollama import OllamaSettings
     return TranslationSettings(
         translation_engine=TRANSLATION_ENGINE_BERGAMOT,
         llm=LlmSettings("http://127.0.0.1:1234", "mock-model", 30.0),
+        ollama=OllamaSettings(),
         bergamot=BergamotSettings("node", 30.0, "en", "de"),
         seamless=_default_seamless_settings(),
         preprocess=_default_preprocess_settings(enabled=False),

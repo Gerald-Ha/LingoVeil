@@ -152,6 +152,43 @@ Administratoren können zusätzlich ein eigenes über **LM Studio** bereitgestel
 
 Die LM-Studio-Konfiguration ist ausschließlich für Administratoren sichtbar.
 
+### Ollama / TranslateGemma
+
+Administratoren können unter **Optionen → Modelle → Local LLM → Ollama** einen eigenständigen Ollama-Server anbinden. LingoVeil verwendet dabei direkt die nativen Endpunkte `/api/tags`, `/api/show` und `/api/chat` und keinen OpenAI-kompatiblen Proxy.
+
+Die empfohlene Docker-Einrichtung lässt Ollama sicher an `127.0.0.1:11434` gebunden und installiert eine eingeschränkte LingoVeil-Bridge:
+
+```bash
+ollama pull translategemma:4b
+sudo python3 scripts/install_lingoveil_ollama_bridge.py
+docker compose up -d --force-recreate lingoveil-live
+```
+
+Nach der Installation muss `lingoveil-live` neu erstellt werden, damit der Container den generierten Bridge-Token aus `.env` einliest. Danach **Optionen → Modelle → Ollama → Verbindung testen** öffnen. Erst nach einem erfolgreichen Test lässt sich Ollama als Engine auswählen.
+
+Der Installer erkennt Dockers `host-gateway` dynamisch; eine Docker-IP oder ein Subnetz muss nicht eingetragen werden. Die Bridge lauscht ausschließlich an diesem Host-Gateway auf Port `11435`, leitet nur `GET /api/tags`, `POST /api/show` und `POST /api/chat` an das lokale Ollama weiter und verlangt ein generiertes Bearer-Token. Ihr unprivilegierter Laufzeitprozess besitzt keinen Docker-Socket-Zugriff. Ein erneuter Installer-Aufruf aktualisiert die Bridge und erhält das Token. Deinstallation:
+
+```bash
+sudo python3 scripts/uninstall_lingoveil_ollama_bridge.py
+```
+
+Verwendet die Host-Firewall wie UFW eine standardmäßige Deny-Regel, kann sie auch den Zugriff von Containern auf die Host-Bridge blockieren. Typische Symptome sind die Installer-Meldung `Bridge host test succeeded, but Docker test failed` oder ein Timeout bei **Verbindung testen**. Die Compose-Konfiguration gibt LingoVeils Docker-Bridge den festen Interfacenamen `lingoveil0`, der nach einem Serverneustart sowie nach `docker compose down` und anschließendem `up` unverändert bleibt. Unter Ubuntu mit UFW wird ausschließlich dieses Interface für das erkannte Host-Gateway freigegeben:
+
+```bash
+OLLAMA_BRIDGE_ADDRESS="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}}{{end}}{{end}}')"
+if [ -z "$OLLAMA_BRIDGE_ADDRESS" ] || ! ip link show lingoveil0 >/dev/null 2>&1; then
+  echo 'Host-Gateway oder lingoveil0 fehlt; zuerst das aktualisierte Compose-Netz neu erstellen' >&2
+else
+  printf 'interface=lingoveil0 destination=%s\n' "$OLLAMA_BRIDGE_ADDRESS"
+  sudo ufw allow in on lingoveil0 to "$OLLAMA_BRIDGE_ADDRESS" port 11435 proto tcp comment 'LingoVeil Ollama Bridge'
+  docker exec lingoveil-live python -c "import socket; s=socket.create_connection(('host.docker.internal', 11435), 5); print('Bridge reachable'); s.close()"
+fi
+```
+
+Das ausgegebene Ziel muss vor dem Anwenden der Regel geprüft werden. Port `11435` niemals für `Anywhere` oder das LAN freigeben; die Regel muss auf `lingoveil0` begrenzt bleiben. Installationen mit einer älteren Compose-Datei müssen das Netz vor dem Hinzufügen dieser Regel einmal mit `docker compose down && docker compose up -d` neu erstellen. Anschließend den Installer erneut ausführen und `lingoveil-live` neu erstellen, damit der neue Token geladen wird. Ist UFW inaktiv oder der Container-Test bereits erfolgreich, wird keine Firewall-Regel benötigt. Vorhandene Regeln lassen sich mit `sudo ufw status numbered` prüfen und mit `sudo ufw delete <Nummer>` entfernen.
+
+Die Standard-URL lautet `http://host.docker.internal:11435`. Sie bleibt für bereits abgesicherte entfernte oder direkt erreichbare Ollama-Server editierbar. Als Expertenalternative kann Ollama an `0.0.0.0:11434` lauschen; dies exponiert Ollama jedoch ohne einschränkende Firewall auf allen Host-Interfaces und wird daher nicht empfohlen. Erfolgreich getestet ist `translategemma:4b`; weitere Varianten gelten weiterhin nur als bekannt und ungetestet. Bei einem Laufzeitfehler deaktiviert LingoVeil Ollama, ohne stillschweigend die Engine zu wechseln.
+
 ---
 
 ## Mehrere Benutzer
@@ -514,7 +551,19 @@ PostgreSQL ist in der Standardkonfiguration nur über `127.0.0.1` vom Host errei
 
 # Updates
 
-LingoVeil prüft standardmäßig beim Start und anschließend ungefähr alle 24 Stunden auf eine neue Version.
+LingoVeil prüft standardmäßig beim Start und anschließend ungefähr alle 6 Stunden auf eine neue Version.
+
+Vergleiche bei einem Update einer bestehenden Installation deine `.env` mit `.env.example` und ergänze neu eingeführte Variablen manuell. Ersetze nicht die vollständige `.env`, da sie installationsspezifische Passwörter und Secrets enthält. Version 3.1.5 ergänzt diese Ollama-Einstellungen:
+
+```dotenv
+LINGOVEIL_OLLAMA_BASE_URL=http://host.docker.internal:11435
+LINGOVEIL_OLLAMA_BRIDGE_TOKEN=
+LINGOVEIL_OLLAMA_MODEL=translategemma:4b
+LINGOVEIL_OLLAMA_TIMEOUT_SEC=120
+LINGOVEIL_OLLAMA_KEEP_ALIVE=2m
+```
+
+Der Bridge-Installer trägt `LINGOVEIL_OLLAMA_BRIDGE_TOKEN` automatisch ein. Wenn `LINGOVEIL_OLLAMA_KEEP_ALIVE` und `LINGOVEIL_ENGINE_IDLE_MINUTES` übereinstimmen, gibt Ollama sein Modell im gleichen Zeitfenster wie die lokalen LingoVeil-Worker frei.
 
 Die automatische Prüfung kann in `.env` deaktiviert werden:
 
@@ -555,6 +604,11 @@ Für die meisten Installationen reichen die Standardwerte aus.
 | `LINGOVEIL_PUBLIC_URL` | leer | öffentliche URL für Links in E-Mails |
 | `LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED` | `false` | lokale LanguageTool-Korrektur für Bergamot |
 | `LINGOVEIL_ENGINE_IDLE_MINUTES` | `2` | EasyOCR, Bergamot und Seamless nach dieser Leerlaufzeit entladen; `0` deaktiviert den Timer |
+| `LINGOVEIL_OLLAMA_BASE_URL` | `http://host.docker.internal:11435` | URL der Bridge oder nativen Ollama-API |
+| `LINGOVEIL_OLLAMA_BRIDGE_TOKEN` | leer | Secret des empfohlenen Bridge-Installers |
+| `LINGOVEIL_OLLAMA_MODEL` | `translategemma:4b` | exakter Ollama-Modellname |
+| `LINGOVEIL_OLLAMA_TIMEOUT_SEC` | `120` | Timeout für Ollama-Anfragen in Sekunden |
+| `LINGOVEIL_OLLAMA_KEEP_ALIVE` | `2m` | Keep-alive-Wert für das Ollama-Modell |
 | `update` | `true` | automatische Update-Prüfung |
 
 </details>

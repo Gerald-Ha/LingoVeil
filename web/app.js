@@ -19,12 +19,13 @@ let thumbPreviewActive = 0;
 const thumbPreviewQueue = [];
 let thumbObserver = null;
 const ENGINE_STORAGE_KEY = "lingoveil.browser.engine";
-const VALID_ENGINES = new Set(["bergamot", "seamless_m4t", "lm_studio"]);
+const VALID_ENGINES = new Set(["bergamot", "seamless_m4t", "lm_studio", "ollama"]);
 
 const ENGINE_LABELS = {
   bergamot: "Bergamot lokal",
   seamless_m4t: "SeamlessM4T lokal",
   lm_studio: "LM Studio",
+  ollama: "Ollama",
 };
 
 function loadSavedEngine() {
@@ -397,7 +398,7 @@ async function loadPersistentHistoryTranslation(item, engine) {
     fetch(withAuth(stored.rendered_url), { headers: authHeaders() }),
   ]);
 
-  const legacyTarget = engine === "seamless_m4t" ? "deu" : "de";
+  const legacyTarget = (engine === "seamless_m4t" || engine === "ollama") ? "deu" : "de";
   const expectedTarget = engineTargetLanguage(engine);
 
   if (String(result.target_language || legacyTarget) !== expectedTarget) {
@@ -1210,6 +1211,8 @@ async function persistEngineSelection(engine) {
 function showEngineUnavailable(message) {
   fallbackToBergamot();
 
+  delete $("engine-error-dialog").dataset.noFallback;
+  $("engine-error-fallback-hint").hidden = false;
   clearFieldErrors();
 
   setStatus("Bergamot lokal ausgewählt");
@@ -1217,6 +1220,26 @@ function showEngineUnavailable(message) {
   $("engine-error-message").textContent = message;
   const dialog = $("engine-error-dialog");
 
+  if (!dialog.open) dialog.showModal();
+}
+
+function showOllamaUnavailable() {
+  const option = $("engine-select")?.querySelector('option[value="ollama"]');
+
+  if (option) option.disabled = true;
+  const dialog = $("ollama-error-dialog");
+
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+function showEngineConfigurationError(message) {
+  clearFieldErrors();
+
+  $("engine-error-message").textContent = message;
+  const dialog = $("engine-error-dialog");
+
+  dialog.dataset.noFallback = "true";
+  $("engine-error-fallback-hint").hidden = true;
   if (!dialog.open) dialog.showModal();
 }
 
@@ -1464,6 +1487,8 @@ async function configureEngineOptions(settings, user) {
 
   const lmStudioOption = select?.querySelector('option[value="lm_studio"]');
 
+  const ollamaOption = select?.querySelector('option[value="ollama"]');
+
   await refreshSeamlessAvailability();
 
   if (lmStudioOption) {
@@ -1476,8 +1501,16 @@ async function configureEngineOptions(settings, user) {
     lmStudioOption.title = configured ? "" : "LM Studio ist noch nicht konfiguriert.";
   }
 
+  if (ollamaOption) {
+    const available = settings?.ollama_status === "AVAILABLE";
+    ollamaOption.disabled = !available;
+    ollamaOption.title = available ? "" : "Ollama muss zuerst erfolgreich getestet werden.";
+  }
+
   const selectedOption = select?.selectedOptions?.[0];
-  if (!selectedOption || selectedOption.disabled || selectedOption.hidden) {
+  if (selectedOption?.value === "ollama" && selectedOption.disabled) {
+    showOllamaUnavailable();
+  } else if (!selectedOption || selectedOption.disabled || selectedOption.hidden) {
     fallbackToBergamot();
 
     await persistEngineSelection("bergamot");
@@ -1515,6 +1548,12 @@ async function validateEngineSelection() {
 
   const option = $("engine-select").selectedOptions[0];
   if (option?.disabled || option?.hidden) {
+    if (engine === "ollama") {
+      showOllamaUnavailable();
+
+      return false;
+    }
+
     fallbackToBergamot();
 
     return false;
@@ -1544,7 +1583,11 @@ async function validateEngineSelection() {
 
     return true;
   } catch (err) {
-    showEngineUnavailable(`${engineLabel(engine)} konnte nicht geprüft werden: ${err.message}`);
+    if (engine === "ollama") {
+      showEngineConfigurationError(err.message);
+    } else {
+      showEngineUnavailable(`${engineLabel(engine)} konnte nicht geprüft werden: ${err.message}`);
+    }
 
     return false;
   } finally {
@@ -1566,6 +1609,7 @@ function updateEngineBadge({ mode = "selected", engineId = null } = {}) {
     "engine-bergamot",
     "engine-seamless_m4t",
     "engine-lm_studio",
+    "engine-ollama",
     "confirmed",
     "processing"
   );
@@ -2132,7 +2176,7 @@ function itemIsTranslated(item, engine = selectedEngine()) {
 }
 
 function engineTargetLanguage(engine = selectedEngine()) {
-  if (engine === "seamless_m4t") return state.targetLanguage;
+  if (engine === "seamless_m4t" || engine === "ollama") return state.targetLanguage;
   const targets = {
     bul: "bg", ces: "cs", deu: "de", spa: "es", est: "et",
     fra: "fr", ita: "it", por: "pt", rus: "ru", ukr: "uk",
@@ -2428,6 +2472,16 @@ async function handleTranslate({ force = false } = {}) {
   } catch (err) {
     setStatus(`Fehler: ${err.message}`);
 
+    if (engine === "ollama") {
+      showOllamaUnavailable();
+
+      updateEngineBadge({ mode: "selected" });
+
+      if (!state.currentTranslatedSrc) setPreviewEmpty();
+
+      return;
+    }
+
     showUrlLoadError(
       err.message,
       state.activeHistoryEntryId || state.selectedPageImageId || "translation",
@@ -2478,10 +2532,29 @@ window.addEventListener("lingoveil:models-updated", () => {
 
 $("btn-engine-error-close").addEventListener("click", () => {
   $("engine-error-dialog").close();
+
+  delete $("engine-error-dialog").dataset.noFallback;
+  $("engine-error-fallback-hint").hidden = false;
+});
+
+$("btn-ollama-error-close").addEventListener("click", () => {
+  $("ollama-error-dialog").close();
+});
+
+$("ollama-error-dialog").addEventListener("cancel", () => {
+  $("ollama-error-dialog").close();
+});
+
+window.addEventListener("lingoveil:ollama-availability", (event) => {
+  const option = $("engine-select")?.querySelector('option[value="ollama"]');
+
+  if (option) option.disabled = !event.detail?.available;
 });
 
 $("engine-error-dialog").addEventListener("cancel", () => {
-  fallbackToBergamot();
+  if ($("engine-error-dialog").dataset.noFallback !== "true") fallbackToBergamot();
+
+  delete $("engine-error-dialog").dataset.noFallback;
 });
 
 $("btn-url-error-close").addEventListener("click", () => {
@@ -3080,6 +3153,11 @@ async function init() {
     ) {
       $("engine-select").value = settings.engine;
       saveEngineChoice(settings.engine);
+    } else if (settings.engine === "ollama") {
+      $("engine-select").value = "ollama";
+      saveEngineChoice("ollama");
+
+      showOllamaUnavailable();
     } else {
       fallbackToBergamot();
     }

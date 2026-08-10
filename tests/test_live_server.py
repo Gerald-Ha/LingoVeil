@@ -555,7 +555,9 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("def enqueue(", jobs)
 
-        self.assertIn("return Promise.resolve().then(task)", browser)
+        self.assertIn("Promise.resolve()", browser)
+
+        self.assertIn(".then(job.task)", browser)
 
         self.assertIn("runTranslationBackgroundJob", browser)
 
@@ -1772,7 +1774,7 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("Authorization", updater)
 
-        self.assertIn('APP_VERSION = "3.0.0"', updater)
+        self.assertIn('APP_VERSION = "3.1.5"', updater)
 
         self.assertIn('UPDATE_PROJECT_ID = "lingoveil-docker"', updater)
 

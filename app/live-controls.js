@@ -136,16 +136,18 @@
   ];
   const BERGAMOT_TARGETS = new Set(["bul","ces","deu","spa","est","fra","ita","por","rus","ukr"]);
 
-  const languageChoices = (locale) => {
+  const languageChoices = (locale, engine, engineCapabilities = {}) => {
     let names;
     try { names = new Intl.DisplayNames([locale], {type: "language"}); } catch (_) { names = null; }
 
-    return TARGET_LANGUAGES.map((code) => {
+    const allowed = new Set(engineCapabilities[engine] || []);
+
+    const filtered = allowed.size ? TARGET_LANGUAGES.filter((code) => allowed.has(code)) : TARGET_LANGUAGES;
+    return filtered.map((code) => {
       const intlCode = code === "cmn_Hant" ? "zh-Hant" : code.replace("_", "-");
 
       const name = names?.of(intlCode) || code;
-      const engines = BERGAMOT_TARGETS.has(code) ? "Bergamot + SeamlessM4T" : "SeamlessM4T";
-      return [code, `${name} (${engines})`];
+      return [code, name];
     }).sort((a, b) => a[1].localeCompare(b[1], locale));
   };
 
@@ -557,7 +559,11 @@
 
       const language = selectField(
         "Zielsprache der Übersetzung", s.target_language || "deu",
-        languageChoices(s.interface_language || "de")
+        languageChoices(
+          s.interface_language || "de", s.engine,
+          capabilities.translation_engines || {}
+
+        )
 
       );
 
@@ -651,6 +657,16 @@
 
       const timeout = field("LM Studio Timeout (s)", s.lm_studio_timeout_sec, "number");
 
+      const ollamaBase = field("Ollama Basis-URL", s.ollama_base_url);
+
+      const ollamaModel = selectField("Ollama Modell", s.ollama_model || "translategemma:4b", [
+        [s.ollama_model || "translategemma:4b", s.ollama_model || "translategemma:4b"]
+      ]);
+
+      const ollamaTimeout = field("Ollama Timeout (s)", s.ollama_timeout_sec, "number");
+
+      const ollamaKeepAlive = field("Ollama Keep-Alive", s.ollama_keep_alive || "2m");
+
       advanced.append(
         prefetch.closest(".live-field"), historyLimit.closest(".live-field"),
         ttl.closest(".live-field")
@@ -662,6 +678,14 @@
       model.closest(".live-field").remove();
 
       timeout.closest(".live-field").remove();
+
+      ollamaBase.closest(".live-field").remove();
+
+      ollamaModel.closest(".live-field").remove();
+
+      ollamaTimeout.closest(".live-field").remove();
+
+      ollamaKeepAlive.closest(".live-field").remove();
 
       const mangaSettings = document.createElement("fieldset");
 
@@ -840,10 +864,17 @@
 
           modelsPanel.replaceChildren();
 
-          const lmStudioSettings = document.createElement("fieldset");
+          const localLlmSettings = document.createElement("fieldset");
 
-          lmStudioSettings.className = "live-settings-group";
-          const lmStudioLegend = document.createElement("legend");
+          localLlmSettings.className = "live-settings-group";
+          const localLlmLegend = document.createElement("legend");
+
+          localLlmLegend.textContent = uiText("Lokale LLM");
+
+          const lmStudioSettings = document.createElement("section");
+
+          lmStudioSettings.className = "live-model";
+          const lmStudioLegend = document.createElement("h3");
 
           lmStudioLegend.textContent = "LM Studio";
           const saveLmStudio = document.createElement("button");
@@ -851,6 +882,32 @@
           saveLmStudio.type = "button";
           saveLmStudio.className = "primary";
           saveLmStudio.textContent = uiText("LM Studio speichern");
+
+          const testLmStudio = document.createElement("button");
+
+          testLmStudio.type = "button";
+          testLmStudio.className = "secondary";
+          testLmStudio.textContent = uiText("Verbindung testen");
+
+          const lmStatus = document.createElement("p");
+
+          lmStatus.className = "hint";
+          lmStatus.textContent = `${uiText("Status:")} ${uiText("Nicht geprüft")}`;
+          testLmStudio.addEventListener("click", async () => {
+            testLmStudio.disabled = true;
+            lmStatus.textContent = `${uiText("Status:")} ${uiText("Prüfung läuft …")}`;
+            try {
+              await request("/api/lm-studio/test", {
+                method: "POST",
+                body: JSON.stringify({base_url: base.value, model: model.value,
+                  timeout_sec: Number(timeout.value)})
+              });
+
+              lmStatus.textContent = `${uiText("Status:")} ${uiText("Verbunden")}`;
+            } catch (e) {
+              lmStatus.textContent = `${uiText("Status:")} ${uiText("Nicht verfügbar")} – ${e.message}`;
+            } finally { testLmStudio.disabled = false; }
+          });
 
           saveLmStudio.addEventListener("click", async () => {
             saveLmStudio.disabled = true;
@@ -878,10 +935,109 @@
             base.closest(".live-field"),
             model.closest(".live-field"),
             timeout.closest(".live-field"),
-            saveLmStudio
+            saveLmStudio, testLmStudio, lmStatus
           );
 
-          modelsPanel.append(lmStudioSettings);
+          const ollamaSettings = document.createElement("section");
+
+          ollamaSettings.className = "live-model";
+          const ollamaHeading = document.createElement("h3");
+
+          ollamaHeading.textContent = "Ollama";
+          const refreshOllama = document.createElement("button");
+
+          refreshOllama.type = "button";
+          refreshOllama.className = "secondary";
+          refreshOllama.textContent = uiText("Modelle aktualisieren");
+
+          const testOllama = document.createElement("button");
+
+          testOllama.type = "button";
+          testOllama.className = "secondary";
+          testOllama.textContent = uiText("Verbindung testen");
+
+          const ollamaStatus = document.createElement("p");
+
+          ollamaStatus.className = "hint";
+          const statusLabels = {
+            NOT_CONFIGURED: "Nicht konfiguriert", NOT_TESTED: "Nicht geprüft",
+            AVAILABLE: "Verbunden", UNAVAILABLE: "Nicht verfügbar"
+          };
+
+          ollamaStatus.textContent = `${uiText("Status:")} ${uiText(statusLabels[s.ollama_status] || "Nicht geprüft")}`;
+          const loadOllamaModels = async () => {
+            refreshOllama.disabled = true;
+            try {
+              const query = new URLSearchParams({base_url: ollamaBase.value,
+                timeout_sec: String(Number(ollamaTimeout.value))});
+
+              const result = await request(`/api/ollama/models?${query}`);
+
+              const selected = ollamaModel.value;
+              ollamaModel.replaceChildren();
+
+              result.models.forEach((entry) => {
+                const option = document.createElement("option");
+
+                option.value = entry.model;
+                option.textContent = `${entry.model} — ${uiText(entry.officially_supported ? "Unterstützt" : "Nicht offiziell unterstützt")}`;
+                ollamaModel.append(option);
+              });
+
+              if (![...ollamaModel.options].some((option) => option.value === selected)) {
+                const option = document.createElement("option");
+
+                option.value = selected;
+                option.textContent = `${selected} — ${uiText("Nicht offiziell unterstützt")}`;
+                ollamaModel.prepend(option);
+              }
+
+              ollamaModel.value = selected;
+            } catch (e) {
+              ollamaStatus.textContent = `${uiText("Status:")} ${uiText("Nicht verfügbar")} – ${e.message}`;
+            } finally { refreshOllama.disabled = false; }
+          };
+
+          refreshOllama.addEventListener("click", loadOllamaModels);
+
+          testOllama.addEventListener("click", async () => {
+            testOllama.disabled = true;
+            ollamaStatus.textContent = `${uiText("Status:")} ${uiText("Prüfung läuft …")}`;
+            try {
+              const result = await request("/api/ollama/test", {
+                method: "POST",
+                body: JSON.stringify({base_url: ollamaBase.value, model: ollamaModel.value,
+                  timeout_sec: Number(ollamaTimeout.value), keep_alive: ollamaKeepAlive.value})
+              });
+
+              s.ollama_base_url = ollamaBase.value;
+              s.ollama_model = ollamaModel.value;
+              s.ollama_timeout_sec = Number(ollamaTimeout.value);
+
+              s.ollama_keep_alive = ollamaKeepAlive.value;
+              s.ollama_status = result.status;
+              ollamaStatus.textContent = `${uiText("Status:")} ${uiText("Verbunden")}`;
+              window.dispatchEvent(new CustomEvent("lingoveil:ollama-availability", {
+                detail: {available: true}
+              }));
+            } catch (e) {
+              s.ollama_status = "UNAVAILABLE";
+              ollamaStatus.textContent = `${uiText("Status:")} ${uiText("Nicht verfügbar")} – ${e.message}`;
+              window.dispatchEvent(new CustomEvent("lingoveil:ollama-availability", {
+                detail: {available: false}
+              }));
+            } finally { testOllama.disabled = false; }
+          });
+
+          ollamaSettings.append(
+            ollamaHeading, ollamaBase.closest(".live-field"),
+            ollamaModel.closest(".live-field"), ollamaTimeout.closest(".live-field"),
+            ollamaKeepAlive.closest(".live-field"), refreshOllama, testOllama, ollamaStatus
+          );
+
+          localLlmSettings.append(localLlmLegend, lmStudioSettings, ollamaSettings);
+
+          modelsPanel.append(localLlmSettings);
 
           let downloadRunning = false;
           models.forEach((model) => {
@@ -1240,6 +1396,10 @@
             browser_cache_ttl_sec: Number(ttl.value),
             lm_studio_base_url: base.value, lm_studio_model: model.value,
             lm_studio_timeout_sec: Number(timeout.value)
+
+            ,ollama_base_url: ollamaBase.value, ollama_model: ollamaModel.value,
+            ollama_timeout_sec: Number(ollamaTimeout.value),
+            ollama_keep_alive: ollamaKeepAlive.value
           })});
 
           applyTheme(theme.value);

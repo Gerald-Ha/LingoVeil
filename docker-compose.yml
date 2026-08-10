@@ -42,10 +42,17 @@ services:
       LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED: "${LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED:-false}"
       LINGOVEIL_BERGAMOT_LANGUAGETOOL_TIMEOUT_SEC: "${LINGOVEIL_BERGAMOT_LANGUAGETOOL_TIMEOUT_SEC:-5}"
       LINGOVEIL_ENGINE_IDLE_MINUTES: "${LINGOVEIL_ENGINE_IDLE_MINUTES:-2}"
+      LINGOVEIL_OLLAMA_BASE_URL: "${LINGOVEIL_OLLAMA_BASE_URL:-http://host.docker.internal:11435}"
+      LINGOVEIL_OLLAMA_MODEL: "${LINGOVEIL_OLLAMA_MODEL:-translategemma:4b}"
+      LINGOVEIL_OLLAMA_TIMEOUT_SEC: "${LINGOVEIL_OLLAMA_TIMEOUT_SEC:-120}"
+      LINGOVEIL_OLLAMA_KEEP_ALIVE: "${LINGOVEIL_OLLAMA_KEEP_ALIVE:-2m}"
+      LINGOVEIL_OLLAMA_BRIDGE_TOKEN: "${LINGOVEIL_OLLAMA_BRIDGE_TOKEN:-}"
       UPDATE_ENABLED: "${update:-true}"
     depends_on:
       postgres:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "0.0.0.0:${LINGOVEIL_LIVE_PORT:-8765}:${LINGOVEIL_LIVE_PORT:-8765}"
     volumes:
@@ -63,3 +70,9 @@ volumes:
   lingoveil-models:
   lingoveil-data:
   lingoveil-cache:
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: lingoveil0

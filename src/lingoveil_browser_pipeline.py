@@ -21,6 +21,7 @@ from PIL import Image
 from lingoveil_config import (
     TRANSLATION_ENGINE_BERGAMOT,
     TRANSLATION_ENGINE_LM_STUDIO,
+    TRANSLATION_ENGINE_OLLAMA,
     TRANSLATION_ENGINE_SEAMLESS_M4T,
     load_translation_settings,
     validate_translation_engine,
@@ -100,7 +101,11 @@ class BrowserTranslationPipeline:
 
         self.settings = load_translation_settings(env_file_path())
 
-        self.engine_manager = TranslationEngineManager(self.settings, self._log)
+        self.ollama_unavailable_callback: Callable[[str], None] | None = None
+        self.ollama_available = False
+        self.engine_manager = TranslationEngineManager(
+            self.settings, self._log, self._on_ollama_unavailable
+        )
 
         self.persistent_cache = load_cache(translation_cache_path())
 
@@ -395,6 +400,7 @@ class BrowserTranslationPipeline:
         pass
         target = str(live_settings.get("target_language", "deu")).strip()
 
+        self.ollama_available = live_settings.get("ollama_status") == "AVAILABLE"
         bergamot_codes = {
             "bul": "bg", "ces": "cs", "deu": "de", "spa": "es", "est": "et",
             "fra": "fr", "ita": "it", "por": "pt", "rus": "ru", "ukr": "uk",
@@ -411,6 +417,13 @@ class BrowserTranslationPipeline:
                 base_url=str(live_settings["lm_studio_base_url"]),
                 model=str(live_settings["lm_studio_model"]),
                 timeout_sec=float(live_settings["lm_studio_timeout_sec"]),
+            ),
+            ollama=replace(
+                self.settings.ollama,
+                base_url=str(live_settings["ollama_base_url"]),
+                model=str(live_settings["ollama_model"]),
+                timeout_sec=float(live_settings["ollama_timeout_sec"]),
+                keep_alive=str(live_settings["ollama_keep_alive"]),
             ),
             bergamot=replace(
                 self.settings.bergamot,
@@ -446,7 +459,9 @@ class BrowserTranslationPipeline:
         )
 
     def _cache_model(self, engine_name: str) -> str:
-        return engine_cache_model(engine_name, self.settings.llm.model)
+        return engine_cache_model(
+            engine_name, self.settings.llm.model, self.settings.ollama.model
+        )
 
     def _cache_prompt_version(self, engine_name: str) -> str:
         return engine_cache_prompt_version(engine_name)
@@ -742,6 +757,12 @@ class BrowserTranslationPipeline:
         if not groups:
             return {}
 
+        if engine_name == TRANSLATION_ENGINE_OLLAMA and not self.ollama_available:
+            raise RuntimeError(
+                "Ollama ist nicht verfügbar. Bitte den Verbindungstest unter "
+                "Optionen → Modelle erneut ausführen."
+            )
+
         self._ensure_engine(engine_name)
 
         if engine_name == TRANSLATION_ENGINE_SEAMLESS_M4T and not self._seamless_ready():
@@ -812,23 +833,33 @@ class BrowserTranslationPipeline:
                         "verwende OCR-Text als Fallback"
                     )
 
-                translations[item.block_id] = {
-                    "german": item.translation,
-                    "cache_source": "new_translation",
-                    "status": status,
-                }
+                for resolved_id in plan.key_to_group_ids.get(
+                    cache_key, [item.block_id]
+                ):
+                    translations[resolved_id] = {
+                        "german": item.translation,
+                        "cache_source": "new_translation",
+                        "status": status,
+                    }
 
             save_cache_atomic(translation_cache_path(), self.persistent_cache)
 
         return translations
     def _source_language(self, engine_name: str) -> str:
-        if engine_name == TRANSLATION_ENGINE_SEAMLESS_M4T:
+        if engine_name in (TRANSLATION_ENGINE_SEAMLESS_M4T, TRANSLATION_ENGINE_OLLAMA):
             return self.settings.seamless.source_lang
         return self.settings.bergamot.source_lang
     def _target_language(self, engine_name: str) -> str:
-        if engine_name == TRANSLATION_ENGINE_SEAMLESS_M4T:
+        if engine_name in (TRANSLATION_ENGINE_SEAMLESS_M4T, TRANSLATION_ENGINE_OLLAMA):
             return self.settings.seamless.target_lang
         return self.settings.bergamot.target_lang
+    def _on_ollama_unavailable(self, reason: str) -> None:
+        self.ollama_available = False
+        self._log(f"Ollama wurde als nicht verfügbar markiert: {reason}")
+
+        if self.ollama_unavailable_callback is not None:
+            self.ollama_unavailable_callback(reason)
+
     def _render_exact_overlay(
         self,
         image: Image.Image,
@@ -904,6 +935,7 @@ class BrowserTranslationPipeline:
                 "bergamot": stats.bergamot_requests,
                 "seamless_m4t": stats.seamless_m4t_requests,
                 "lm_studio": stats.lm_studio_requests,
+                "ollama": stats.ollama_requests,
             },
             "cache_hits": {
                 "session": len(self.session_resolved),
@@ -1476,7 +1508,9 @@ class BrowserTranslationPipeline:
                 engine = str(cached_result.get("engine") or stored_key.split(":", 1)[0])
 
                 legacy_target = (
-                    "deu" if engine == TRANSLATION_ENGINE_SEAMLESS_M4T else "de"
+                    "deu" if engine in (
+                        TRANSLATION_ENGINE_SEAMLESS_M4T, TRANSLATION_ENGINE_OLLAMA
+                    ) else "de"
                 )
 
                 target_language = str(cached_result.get("target_language", legacy_target))
@@ -1649,7 +1683,9 @@ class BrowserTranslationPipeline:
                 result, rendered, original = cached
                 current_target = self._target_language(engine_name)
 
-                legacy_target = "deu" if engine_name == TRANSLATION_ENGINE_SEAMLESS_M4T else "de"
+                legacy_target = "deu" if engine_name in (
+                    TRANSLATION_ENGINE_SEAMLESS_M4T, TRANSLATION_ENGINE_OLLAMA
+                ) else "de"
                 cached_target = str(result.get("target_language", legacy_target))
 
                 if cached_target != current_target:

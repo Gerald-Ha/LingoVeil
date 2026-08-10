@@ -78,6 +78,21 @@
     "Browser-Cache (Sekunden)": "Browser cache (seconds)",
     "LM Studio Basis-URL": "LM Studio base URL", "LM Studio Modell": "LM Studio model",
     "LM Studio Timeout (s)": "LM Studio timeout (s)", "LM Studio speichern": "Save LM Studio",
+    "Lokale LLM": "Local LLM", "Ollama Basis-URL": "Ollama base URL",
+    "Ollama Modell": "Ollama model", "Ollama Timeout (s)": "Ollama timeout (s)",
+    "Ollama Keep-Alive": "Ollama keep-alive", "Verbindung testen": "Test connection",
+    "Modelle aktualisieren": "Refresh models", "Status:": "Status:",
+    "Nicht konfiguriert": "Not configured", "Nicht geprüft": "Not tested",
+    "Verbunden": "Connected", "Nicht verfügbar": "Unavailable",
+    "Unterstützt": "Supported", "Nicht offiziell unterstützt": "Not officially supported",
+    "Ollama nicht verfügbar": "Ollama unavailable", "Verstanden": "Understood",
+    "Die Verbindung zu Ollama ist fehlgeschlagen.": "The connection to Ollama failed.",
+    "Ollama ist derzeit nicht erreichbar. Bitte wähle eine andere Übersetzungs-Engine.":
+      "Ollama is currently unavailable. Please select another translation engine.",
+    "Wenn du das Verbindungsproblem behoben hast, öffne Optionen → Modelle → Ollama und führe den Verbindungstest erneut aus.":
+      "After resolving the connection issue, open Options → Models → Ollama and run the connection test again.",
+    "Nach einem erfolgreichen Verbindungstest steht Ollama wieder als Übersetzungs-Engine zur Verfügung.":
+      "Ollama will become available as a translation engine again after a successful connection test.",
     "Verbinden": "Connect"
     ,"Bestätige jede Änderung mit deinem aktuellen Passwort. Lass das neue Passwort leer, wenn es unverändert bleiben soll.":
       "Confirm every change with your current password. Leave the new password blank to keep it unchanged."

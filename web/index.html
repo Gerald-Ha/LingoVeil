@@ -29,6 +29,7 @@
           <option value="bergamot">Bergamot lokal</option>
         <option value="seamless_m4t" disabled>SeamlessM4T lokal</option>
         <option value="lm_studio" disabled hidden>LM Studio</option>
+        <option value="ollama" disabled>Ollama</option>
         </select>
       </div>
       <div class="header-updates" id="header-updates" aria-live="polite"></div>
@@ -149,9 +150,19 @@
   <dialog class="engine-error-dialog" id="engine-error-dialog">
     <h2>Engine nicht verfügbar</h2>
     <p id="engine-error-message"></p>
-    <p class="hint">Als sichere Alternative wurde Bergamot lokal ausgewählt.</p>
+    <p class="hint" id="engine-error-fallback-hint">Als sichere Alternative wurde Bergamot lokal ausgewählt.</p>
     <div class="engine-error-actions">
       <button type="button" class="primary" id="btn-engine-error-close">Schließen</button>
+    </div>
+  </dialog>
+  <dialog class="engine-error-dialog" id="ollama-error-dialog">
+    <h2>Ollama nicht verfügbar</h2>
+    <p>Die Verbindung zu Ollama ist fehlgeschlagen.</p>
+    <p>Ollama ist derzeit nicht erreichbar. Bitte wähle eine andere Übersetzungs-Engine.</p>
+    <p>Wenn du das Verbindungsproblem behoben hast, öffne Optionen → Modelle → Ollama und führe den Verbindungstest erneut aus.</p>
+    <p>Nach einem erfolgreichen Verbindungstest steht Ollama wieder als Übersetzungs-Engine zur Verfügung.</p>
+    <div class="engine-error-actions">
+      <button type="button" class="primary" id="btn-ollama-error-close">Verstanden</button>
     </div>
   </dialog>
   <dialog class="engine-error-dialog" id="url-error-dialog">

@@ -154,6 +154,43 @@ Administrators can additionally use their own model provided through **LM Studio
 
 The LM Studio configuration is visible to administrators only.
 
+### Ollama / TranslateGemma
+
+Administrators can connect a standalone Ollama server under **Options → Models → Local LLM → Ollama**. LingoVeil uses Ollama's native `/api/tags`, `/api/show`, and `/api/chat` endpoints; it does not use an OpenAI-compatible proxy.
+
+The recommended Docker setup keeps Ollama safely bound to `127.0.0.1:11434` and installs a restricted LingoVeil bridge:
+
+```bash
+ollama pull translategemma:4b
+sudo python3 scripts/install_lingoveil_ollama_bridge.py
+docker compose up -d --force-recreate lingoveil-live
+```
+
+Recreating `lingoveil-live` is required after installation so that the container reads the generated bridge token from `.env`. Then open **Options → Models → Ollama → Test connection**. Ollama can only be selected after a successful test.
+
+The installer dynamically detects Docker's `host-gateway`; no Docker subnet or IP needs to be entered. The bridge listens only on that host-gateway at port `11435`, forwards only `GET /api/tags`, `POST /api/show`, and `POST /api/chat` to loopback Ollama, and requires a generated Bearer token. Its unprivileged runtime process has no Docker socket access. Re-running the installer updates the bridge while preserving its token. To remove it:
+
+```bash
+sudo python3 scripts/uninstall_lingoveil_ollama_bridge.py
+```
+
+If a host firewall such as UFW uses a default-deny policy, it may also block containers from reaching the host bridge. A typical symptom is that the installer reports `Bridge host test succeeded, but Docker test failed` or that **Test connection** times out. The Compose configuration gives LingoVeil's Docker bridge the stable interface name `lingoveil0`, which remains the same after a server restart or `docker compose down` followed by `up`. On Ubuntu with UFW, allow only that interface to reach the detected host-gateway:
+
+```bash
+OLLAMA_BRIDGE_ADDRESS="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}}{{end}}{{end}}')"
+if [ -z "$OLLAMA_BRIDGE_ADDRESS" ] || ! ip link show lingoveil0 >/dev/null 2>&1; then
+  echo 'Host-gateway or lingoveil0 missing; recreate the updated Compose network first' >&2
+else
+  printf 'interface=lingoveil0 destination=%s\n' "$OLLAMA_BRIDGE_ADDRESS"
+  sudo ufw allow in on lingoveil0 to "$OLLAMA_BRIDGE_ADDRESS" port 11435 proto tcp comment 'LingoVeil Ollama Bridge'
+  docker exec lingoveil-live python -c "import socket; s=socket.create_connection(('host.docker.internal', 11435), 5); print('Bridge reachable'); s.close()"
+fi
+```
+
+Review the printed destination before applying the rule. Never allow port `11435` from `Anywhere` or the LAN; the rule must remain limited to `lingoveil0`. Installations created with an older Compose file must recreate the network once with `docker compose down && docker compose up -d` before adding this rule. Then run the installer again and recreate `lingoveil-live` so it loads the new token. If UFW is inactive or the container test already succeeds, no firewall rule is needed. Existing rules can be reviewed and removed with `sudo ufw status numbered` and `sudo ufw delete <number>`.
+
+The default URL is `http://host.docker.internal:11435`. It remains editable for users who already operate a secured remote or directly reachable Ollama server. As an advanced alternative, Ollama can listen on `0.0.0.0:11434`, but that exposes it on every host interface unless a firewall restricts access and is therefore not recommended. LingoVeil has successfully tested `translategemma:4b`; other variants remain known but untested. A runtime connection failure disables Ollama without silently switching engines.
+
 ---
 
 ## Multiple Users
@@ -515,7 +552,19 @@ In the default configuration, PostgreSQL is only accessible from the host throug
 
 # Updates
 
-By default, LingoVeil checks for a new version at startup and then approximately every 24 hours.
+By default, LingoVeil checks for a new version at startup and then approximately every 6 hours.
+
+When updating an existing installation, compare your `.env` with `.env.example` and add newly introduced variables manually. Do not replace the complete `.env`, because it contains installation-specific passwords and secrets. Version 3.1.5 adds these Ollama settings:
+
+```dotenv
+LINGOVEIL_OLLAMA_BASE_URL=http://host.docker.internal:11435
+LINGOVEIL_OLLAMA_BRIDGE_TOKEN=
+LINGOVEIL_OLLAMA_MODEL=translategemma:4b
+LINGOVEIL_OLLAMA_TIMEOUT_SEC=120
+LINGOVEIL_OLLAMA_KEEP_ALIVE=2m
+```
+
+The bridge installer fills `LINGOVEIL_OLLAMA_BRIDGE_TOKEN` automatically. Matching `LINGOVEIL_OLLAMA_KEEP_ALIVE` to `LINGOVEIL_ENGINE_IDLE_MINUTES` lets Ollama release its model on the same schedule as LingoVeil's local workers.
 
 The automatic check can be disabled in `.env`:
 
@@ -556,6 +605,11 @@ For most installations, the default values are sufficient.
 | `LINGOVEIL_PUBLIC_URL` | empty | public URL for links in emails |
 | `LINGOVEIL_BERGAMOT_LANGUAGETOOL_ENABLED` | `false` | local LanguageTool correction for Bergamot |
 | `LINGOVEIL_ENGINE_IDLE_MINUTES` | `2` | unload EasyOCR, Bergamot and Seamless after this idle period; `0` disables the timer |
+| `LINGOVEIL_OLLAMA_BASE_URL` | `http://host.docker.internal:11435` | bridge or native Ollama API URL |
+| `LINGOVEIL_OLLAMA_BRIDGE_TOKEN` | empty | secret generated by the recommended bridge installer |
+| `LINGOVEIL_OLLAMA_MODEL` | `translategemma:4b` | exact Ollama model name |
+| `LINGOVEIL_OLLAMA_TIMEOUT_SEC` | `120` | Ollama request timeout in seconds |
+| `LINGOVEIL_OLLAMA_KEEP_ALIVE` | `2m` | Ollama model keep-alive value |
 | `update` | `true` | automatic update check |
 
 </details>
