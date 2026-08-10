@@ -124,6 +124,7 @@
     "Neues Update verfügbar": "New update available",
     "Installed Version:": "Installed version:", "Latest Version:": "Latest version:",
     "Noch nicht geprüft": "Not checked yet", "Update öffnen": "Open update",
+    "Release Notes öffnen": "Open release notes",
     "Unbekannt": "Unknown", "Prüfung läuft …": "Checking…",
     "Falls du einen Fehler gefunden hast oder einen Verbesserungsvorschlag einreichen möchtest, sende bitte eine E-Mail an den Entwickler.":
       "If you found a bug or would like to suggest an improvement, please email the developer."

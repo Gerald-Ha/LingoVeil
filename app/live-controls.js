@@ -1490,6 +1490,13 @@
     updateLink.rel = "noopener noreferrer";
     updateLink.textContent = tr("Update öffnen");
 
+    const releaseNotesLink = document.createElement("a");
+
+    releaseNotesLink.className = "secondary app-info-update-link hidden";
+    releaseNotesLink.target = "_blank";
+    releaseNotesLink.rel = "noopener noreferrer";
+    releaseNotesLink.textContent = tr("Release Notes öffnen");
+
     const checkUpdate = document.createElement("button");
 
     checkUpdate.type = "button";
@@ -1521,6 +1528,14 @@
         updateLink.removeAttribute("href");
 
         updateLink.classList.add("hidden");
+      }
+
+      if (result.notes_url) {
+        releaseNotesLink.href = result.notes_url;
+        releaseNotesLink.classList.remove("hidden");
+      } else {
+        releaseNotesLink.removeAttribute("href");
+        releaseNotesLink.classList.add("hidden");
       }
     };
 
@@ -1554,7 +1569,7 @@
     checkUpdate.addEventListener("click", () => void runUpdateCheck(true));
 
     versionGroup.append(
-      versionLegend, statusGrid, checkUpdate, updateLink
+      versionLegend, statusGrid, checkUpdate, updateLink, releaseNotesLink
     );
 
     const supportGroup = document.createElement("fieldset");
