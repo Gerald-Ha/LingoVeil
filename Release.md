@@ -1,6 +1,21 @@
-# LingoVeil 3.1.5
+# LingoVeil 3.1.7
 
-Version 3.1.5 expands LingoVeil with a fully local Ollama/TranslateGemma integration and improves memory efficiency during longer Docker sessions.
+Version 3.1.7 improves the English interface language, adds image filtering controls, expands LingoVeil with a fully local Ollama/TranslateGemma integration, and improves memory efficiency during longer Docker sessions.
+
+## Interface Language Improvements
+
+* The English interface translation has been improved throughout the application.
+* Remaining German labels in History, Bookmarks, and the bookmark chapter dialog are now displayed in English when English is selected as the interface language.
+* Dynamic status text, including translated-image counts, last-read information, empty reading states, and chapter ordering, is now translated correctly.
+* Input placeholders, including bookmark search and website, image, or PDF URL fields, now follow the selected interface language.
+* Nested accessibility labels, titles, and placeholders are translated reliably, including when the interface language changes while the application is running.
+
+## OCR and Translation Image Filters
+
+* A new **Filter** tab is available in the **Options** dialog.
+* Minimum image width and height thresholds can be configured to automatically exclude small loaded images from OCR and translation.
+* Images at or below either configured threshold are skipped, reducing unnecessary OCR and translation work and saving CPU, memory, and translation resources.
+* Setting a threshold to `0` disables that individual filter.
 
 ## Ollama and TranslateGemma
 

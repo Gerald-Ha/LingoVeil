@@ -644,6 +644,7 @@ class UserDataStore:
                 "engine", "source_language", "target_language", "prefetch_count",
                 "history_limit", "bookmark_chapter_cache_limit", "default_view",
                 "show_overflow", "show_debug_areas",
+                "ocr_min_image_width", "ocr_min_image_height",
             }
 
             self.save_settings(user_id, {key: settings[key] for key in personal_keys if key in settings})

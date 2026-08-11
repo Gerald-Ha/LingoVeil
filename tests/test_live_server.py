@@ -1340,6 +1340,10 @@ class LiveSourceTests(unittest.TestCase):
 
         browser = (self.root / "web/app.js").read_text(encoding="utf-8")
 
+        pipeline = (self.root / "src/lingoveil_browser_pipeline.py").read_text(
+            encoding="utf-8"
+        )
+
         self.assertNotIn('displayTab.textContent = "Darstellung"', controls)
 
         self.assertIn('modelsTab.textContent = "Modelle"', controls)
@@ -1349,7 +1353,15 @@ class LiveSourceTests(unittest.TestCase):
             controls,
         )
 
-        self.assertIn("if (isAdmin) tabs.append(modelsTab, adminTab)", controls)
+        self.assertIn("if (isAdmin) tabs.append(modelsTab, filterTab, adminTab)", controls)
+
+        self.assertIn('filterTab.textContent = uiText("Filter")', controls)
+
+        self.assertIn('const filterPanel = document.createElement("div")', controls)
+
+        self.assertIn("ocr_min_image_width: Number(ocrMinImageWidth.value)", controls)
+
+        self.assertIn("ocr_min_image_height: Number(ocrMinImageHeight.value)", controls)
 
         self.assertIn('base.closest(".live-field").remove()', controls)
 
@@ -1375,7 +1387,21 @@ class LiveSourceTests(unittest.TestCase):
 
         html = (self.root / "web/index.html").read_text(encoding="utf-8")
 
-        self.assertIn("live-controls.js?v=20260807-14", html)
+        self.assertIn("live-controls.js?v=20260810-2", html)
+
+        self.assertIn('"ocr_min_image_width": 150', self.source)
+
+        self.assertIn('"ocr_min_image_height": 150', self.source)
+
+        self.assertIn("image.width <= self.ocr_min_image_width", pipeline)
+
+        self.assertIn('"filtered": True', pipeline)
+
+        self.assertIn('setStatus(filteredImageStatus(item))', browser)
+
+        self.assertIn('? "· Gefiltert"', browser)
+
+        self.assertIn('!imagePassesOcrFilter(item)', browser)
 
         self.assertIn("modelsPanel.className", controls)
 
@@ -1404,7 +1430,7 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn('adminTab.textContent = "Admin"', controls)
 
-        self.assertIn("if (isAdmin) tabs.append(modelsTab, adminTab)", controls)
+        self.assertIn("if (isAdmin) tabs.append(modelsTab, filterTab, adminTab)", controls)
 
         self.assertIn('request("/api/admin/users")', controls)
 
@@ -1780,7 +1806,7 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("Authorization", updater)
 
-        self.assertIn('APP_VERSION = "3.1.5"', updater)
+        self.assertIn('APP_VERSION = "3.1.7"', updater)
 
         self.assertIn('UPDATE_PROJECT_ID = "lingoveil-docker"', updater)
 

@@ -152,6 +152,8 @@ class BrowserTranslationPipeline:
         self._progress_backup_lock = threading.RLock()
 
         self.bookmark_chapter_cache_limit = 10
+        self.ocr_min_image_width = 150
+        self.ocr_min_image_height = 150
         self._default_history = LiveHistoryStore(
             data_dir,
             Path(os.environ.get("LINGOVEIL_LIVE_CACHE_DIR", "/app/cache")),
@@ -449,6 +451,15 @@ class BrowserTranslationPipeline:
         self.bookmark_chapter_cache_limit = max(
             0,
             int(live_settings.get("bookmark_chapter_cache_limit", 10)),
+        )
+
+        self.ocr_min_image_width = max(
+            0,
+            int(live_settings.get("ocr_min_image_width", 150)),
+        )
+        self.ocr_min_image_height = max(
+            0,
+            int(live_settings.get("ocr_min_image_height", 150)),
         )
 
         self._enforce_all_bookmark_cache_limits()
@@ -958,6 +969,23 @@ class BrowserTranslationPipeline:
 
     def process_image(self, image: Image.Image, engine_name: str) -> dict[str, Any]:
         engine_name = validate_translation_engine(engine_name)
+
+        if (
+            (self.ocr_min_image_width > 0 and image.width <= self.ocr_min_image_width)
+            or (self.ocr_min_image_height > 0 and image.height <= self.ocr_min_image_height)
+        ):
+            return {
+                "engine": engine_name,
+                "target_language": self._target_language(engine_name),
+                "engine_display_name": engine_display_name(engine_name),
+                "groups": [],
+                "group_count": 0,
+                "filtered": True,
+                "image_width": image.width,
+                "image_height": image.height,
+                "minimum_width": self.ocr_min_image_width,
+                "minimum_height": self.ocr_min_image_height,
+            }
 
         groups, _ = self._run_ocr(image)
 
@@ -1740,7 +1768,7 @@ class BrowserTranslationPipeline:
 
         result = self.process_image(load_image_bytes(data), engine_name)
 
-        if history_ref:
+        if history_ref and not result.get("filtered"):
             saved_variant = self.history.save_translation(
                 entry_id=history_ref[0],
                 image_key=history_ref[1],

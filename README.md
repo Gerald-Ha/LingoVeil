@@ -554,7 +554,7 @@ In the default configuration, PostgreSQL is only accessible from the host throug
 
 By default, LingoVeil checks for a new version at startup and then approximately every 6 hours.
 
-When updating an existing installation, compare your `.env` with `.env.example` and add newly introduced variables manually. Do not replace the complete `.env`, because it contains installation-specific passwords and secrets. Version 3.1.5 adds these Ollama settings:
+When updating an existing installation, compare your `.env` with `.env.example` and add newly introduced variables manually. Do not replace the complete `.env`, because it contains installation-specific passwords and secrets. Version 3.1.7 adds these Ollama settings:
 
 ```dotenv
 LINGOVEIL_OLLAMA_BASE_URL=http://host.docker.internal:11435

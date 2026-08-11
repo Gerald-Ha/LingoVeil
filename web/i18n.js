@@ -15,6 +15,10 @@
     "Bookmarks durchsuchen": "Search bookmarks", "Bookmarks durchsuchen …": "Search bookmarks…",
     "Noch keine URL gespeichert.": "No URL saved yet.",
     "Noch keine Manga-Bookmarks gespeichert.": "No manga bookmarks saved yet.",
+    "Keine passenden Bookmarks gefunden.": "No matching bookmarks found.",
+    "Bilder übersetzt": "images translated", "Zuletzt gelesen:": "Last read:",
+    "Noch kein Chapter gelesen": "No chapter read yet",
+    "Reihenfolge: invertiert": "Order: reversed", "Reihenfolge: aktuell": "Order: current",
     "Vorschau": "Preview", "Übersetzung aus": "Translation off",
     "Übersetzung an": "Translation on",
     "An Fenster anpassen": "Fit to window", "Vorheriges Chapter": "Previous chapter",
@@ -35,7 +39,12 @@
     "Du kannst die gespeicherten Lesedaten und Chapter-Datumsangaben behalten oder ebenfalls löschen.":
       "You can keep the saved reading data and chapter dates or delete them as well.",
     "Optionen": "Options", "Allgemein": "General", "Konto": "Account", "Manga": "Manga",
-    "Backup / Restore": "Backup / Restore", "Modelle": "Models", "Admin": "Admin",
+    "Backup / Restore": "Backup / Restore", "Modelle": "Models", "Filter": "Filter", "Admin": "Admin",
+    "OCR- und Übersetzungsfilter": "OCR and translation filter",
+    "Bilder bis einschließlich einer der beiden Grenzgrößen werden weder vom OCR gescannt noch übersetzt. Mit 0 wird die jeweilige Grenze deaktiviert.":
+      "Images at or below either limit are not scanned by OCR or translated. Set a limit to 0 to disable it.",
+    "Bis Breite überspringen (Pixel)": "Skip up to width (pixels)",
+    "Bis Höhe überspringen (Pixel)": "Skip up to height (pixels)",
     "Registrierung": "Registration", "Neue Registrierungen": "New registrations",
     "Aktiviert": "Enabled", "Deaktiviert": "Disabled",
     "Registrierung speichern": "Save registration setting",
@@ -153,24 +162,40 @@
   };
 
   let language = localStorage.getItem(STORAGE_KEY) === "en" ? "en" : "de";
-  const t = (value) => language === "en" ? (EN[value] || value) : value;
+  const translateValue = (value) => {
+    if (EN[value]) return EN[value];
+
+    return value
+      .replaceAll("Bilder übersetzt", EN["Bilder übersetzt"])
+      .replaceAll("Zuletzt gelesen:", EN["Zuletzt gelesen:"]);
+  };
+  const t = (value) => language === "en" ? translateValue(value) : value;
   const translateNode = (root) => {
     if (language !== "en") return;
     if (root.nodeType === Node.TEXT_NODE) {
       const raw = root.nodeValue || "";
       const trimmed = raw.trim();
 
-      if (trimmed && EN[trimmed]) root.nodeValue = raw.replace(trimmed, EN[trimmed]);
+      const translated = trimmed ? translateValue(trimmed) : trimmed;
+
+      if (translated !== trimmed) root.nodeValue = raw.replace(trimmed, translated);
 
       return;
     }
 
     if (!(root instanceof Element)) return;
-    ["aria-label", "title", "placeholder"].forEach((name) => {
-      const value = root.getAttribute(name);
+    const translateAttributes = (element) => {
+      ["aria-label", "title", "placeholder"].forEach((name) => {
+        const value = element.getAttribute(name);
 
-      if (value && EN[value]) root.setAttribute(name, EN[value]);
-    });
+        if (value && EN[value]) element.setAttribute(name, EN[value]);
+      });
+    };
+
+    translateAttributes(root);
+    const elementWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+
+    while (elementWalker.nextNode()) translateAttributes(elementWalker.currentNode);
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 

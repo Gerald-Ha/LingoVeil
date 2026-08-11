@@ -63,6 +63,8 @@ DEFAULTS: dict[str, Any] = {
     "history_limit": 10,
     "bookmark_chapter_cache_limit": 10,
     "browser_cache_ttl_sec": 300,
+    "ocr_min_image_width": 150,
+    "ocr_min_image_height": 150,
     "default_view": "translated",
     "lm_studio_base_url": "",
     "lm_studio_model": "",
@@ -207,6 +209,15 @@ def validate_settings(raw: dict[str, Any]) -> dict[str, Any]:
     if not 30 <= value["browser_cache_ttl_sec"] <= 3600:
         raise ValueError("browser_cache_ttl_sec muss zwischen 30 und 3600 liegen")
 
+    value["ocr_min_image_width"] = int(value["ocr_min_image_width"])
+    value["ocr_min_image_height"] = int(value["ocr_min_image_height"])
+
+    if not 0 <= value["ocr_min_image_width"] <= 10000:
+        raise ValueError("Die OCR-Mindestbreite muss zwischen 0 und 10000 Pixel liegen")
+
+    if not 0 <= value["ocr_min_image_height"] <= 10000:
+        raise ValueError("Die OCR-Mindesthöhe muss zwischen 0 und 10000 Pixel liegen")
+
     value["lm_studio_timeout_sec"] = float(value["lm_studio_timeout_sec"])
 
     if not 1 <= value["lm_studio_timeout_sec"] <= 600:
@@ -297,6 +308,10 @@ class SettingsBody(BaseModel):
     bookmark_chapter_cache_limit: int = Field(ge=0)
 
     browser_cache_ttl_sec: int = Field(ge=30, le=3600)
+
+    ocr_min_image_width: int = Field(ge=0, le=10000)
+
+    ocr_min_image_height: int = Field(ge=0, le=10000)
 
     default_view: str
     lm_studio_base_url: str = Field(max_length=500)
@@ -937,6 +952,7 @@ def build_app():
                 "engine", "source_language", "target_language",
                 "prefetch_count", "history_limit", "bookmark_chapter_cache_limit",
                 "default_view", "show_overflow", "show_debug_areas",
+                "ocr_min_image_width", "ocr_min_image_height",
             }
 
             user_data.save_settings(

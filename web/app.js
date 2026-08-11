@@ -75,6 +75,8 @@ const state = {
   lastAppliedZoom: 1,
   sessionPanelManuallyHidden: false,
   prefetchCount: 10,
+  ocrMinImageWidth: 150,
+  ocrMinImageHeight: 150,
   targetLanguage: "deu",
   activeHistoryEntryId: null,
   urlErrorContext: null,
@@ -294,7 +296,10 @@ function clearFieldErrors() {
 
 function setProcessing(active) {
   state.processing = active;
-  $("btn-translate-gallery").disabled = active || !state.selectedPageImageId;
+  const selectedItem = galleryItemById(state.selectedPageImageId);
+
+  $("btn-translate-gallery").disabled =
+    active || !state.selectedPageImageId || !imagePassesOcrFilter(selectedItem);
   $("btn-analyze-page").disabled = active;
   updateGalleryNavButtons();
 }
@@ -546,6 +551,8 @@ function resetThumbPreviewQueue() {
 }
 
 async function translatePageImageSilent(item, engine) {
+  if (!imagePassesOcrFilter(item)) return;
+
   const imageId = item.id;
   const key = pageImageCacheKey(imageId, engine);
 
@@ -587,6 +594,8 @@ async function translatePageImageSilent(item, engine) {
 
           return;
         }
+
+        if (result.filtered) return;
 
         if (!Array.isArray(item.translated_engines)) item.translated_engines = [];
         if (!item.translated_engines.includes(result.engine || engine)) {
@@ -634,6 +643,22 @@ function enqueuePrefetchImages(images, engine = selectedEngine()) {
   images.slice(0, state.prefetchCount).forEach((item) => {
     void translatePageImageSilent(item, engine);
   });
+}
+
+function imagePassesOcrFilter(item) {
+  const width = Number(item?.width || 0);
+  const height = Number(item?.height || 0);
+
+  if (width <= 0 || height <= 0) return true;
+  const widthAllowed = state.ocrMinImageWidth === 0 || width > state.ocrMinImageWidth;
+  const heightAllowed = state.ocrMinImageHeight === 0 || height > state.ocrMinImageHeight;
+
+  return widthAllowed && heightAllowed;
+}
+
+function filteredImageStatus(item) {
+  return `Vom Filter ignoriert – ${item.width}×${item.height}px, ` +
+    `Grenzwert ${state.ocrMinImageWidth}×${state.ocrMinImageHeight}px`;
 }
 
 function schedulePrefetch() {
@@ -1039,6 +1064,15 @@ async function openHistoryEntry(entryId) {
 
 window.addEventListener("lingoveil:settings-updated", (event) => {
   state.prefetchCount = Math.max(0, Math.min(100, Number(event.detail?.prefetch_count ?? 10)));
+  state.ocrMinImageWidth = Math.max(
+    0, Math.min(10000, Number(event.detail?.ocr_min_image_width ?? 150))
+  );
+  state.ocrMinImageHeight = Math.max(
+    0, Math.min(10000, Number(event.detail?.ocr_min_image_height ?? 150))
+  );
+
+  renderGallery();
+  updateGallerySelectionLabel();
 
   translationCacheTtlMs = Math.max(
     30, Math.min(3600, Number(event.detail?.browser_cache_ttl_sec ?? 300))
@@ -1989,7 +2023,7 @@ function updateGallerySelectionLabel() {
   const idx = item ? item.index + 1 : "?";
   const dims = item && item.width ? ` (${item.width}×${item.height})` : "";
   $("selected-image-label").textContent = `Ausgewähltes Bild: #${idx}${dims}`;
-  $("btn-translate-gallery").disabled = state.processing;
+  $("btn-translate-gallery").disabled = state.processing || !imagePassesOcrFilter(item);
 }
 
 function updateGalleryNavButtons() {
@@ -2095,6 +2129,14 @@ async function selectGalleryImage(imageId, { autoTranslate = true } = {}) {
 
   const item = state.galleryImages.find((i) => i.id === imageId);
 
+  if (item && !imagePassesOcrFilter(item)) {
+    const originalSrc = await resolveOriginalSource(item.id);
+
+    if (originalSrc) setPreviewSources(null, originalSrc, {resetView: true});
+    setStatus(filteredImageStatus(item));
+    return;
+  }
+
   if (item) setStatus(`Bild #${item.index + 1} ausgewählt`);
 
   if (autoTranslate && selectedSource() === "page_analyze") {
@@ -2127,6 +2169,8 @@ function createThumbElement(item, displayIndex) {
       if (label && item.width) {
         updateThumbLabel(label, item);
       }
+
+      if (state.selectedPageImageId === item.id) updateGallerySelectionLabel();
     }
   });
 
@@ -2203,26 +2247,31 @@ function itemIsQueued(item, engine = selectedEngine()) {
 
 function updateThumbLabel(label, item) {
   const dimText = item.width ? `${item.width}×${item.height}` : "…";
+  const filtered = !imagePassesOcrFilter(item);
   const translating = itemIsTranslating(item);
 
   const queued = itemIsQueued(item);
 
   const translated = itemIsTranslated(item);
 
-  const statusName = translating
-    ? "translating"
-    : queued
-      ? "queued"
-      : translated
-        ? "translated"
-        : "open";
-  const statusText = translating
-    ? "· Wird übersetzt …"
-    : queued
-      ? "· Warteschlange"
-      : translated
-        ? "· Übersetzt"
-        : "· Offen";
+  const statusName = filtered
+    ? "filtered"
+    : translating
+      ? "translating"
+      : queued
+        ? "queued"
+        : translated
+          ? "translated"
+          : "open";
+  const statusText = filtered
+    ? "· Gefiltert"
+    : translating
+      ? "· Wird übersetzt …"
+      : queued
+        ? "· Warteschlange"
+        : translated
+          ? "· Übersetzt"
+          : "· Offen";
   label.replaceChildren(document.createTextNode(`#${item.index + 1} · ${dimText}`));
 
   const status = document.createElement("span");
@@ -2337,6 +2386,19 @@ async function handleTranslate({ force = false } = {}) {
 
   const source = selectedSource();
 
+  const filterItem = source === "page_analyze"
+    ? galleryItemById(state.selectedPageImageId)
+    : null;
+
+  if (filterItem && !imagePassesOcrFilter(filterItem)) {
+    const originalSrc = await resolveOriginalSource(filterItem.id);
+
+    if (originalSrc) setPreviewSources(null, originalSrc, {resetView: true});
+    setStatus(filteredImageStatus(filterItem));
+    updateGallerySelectionLabel();
+    return;
+  }
+
   saveEngineChoice(engine);
 
   clearFieldErrors();
@@ -2444,6 +2506,17 @@ async function handleTranslate({ force = false } = {}) {
       throw new Error(
         "Die Zielsprache wurde während des Auftrags geändert; das veraltete Ergebnis wurde verworfen."
       );
+    }
+
+    if (result.filtered) {
+      state.lastResult = null;
+      state.confirmedEngine = null;
+      updateEngineBadge({ mode: "selected" });
+      setStatus(
+        `Vom Filter übersprungen – ${result.image_width}×${result.image_height}px, ` +
+        `Grenzwert ${result.minimum_width}×${result.minimum_height}px`
+      );
+      return;
     }
 
     state.confirmedEngine = result.engine || engine;
@@ -3163,6 +3236,12 @@ async function init() {
     }
 
     state.prefetchCount = Math.max(0, Math.min(100, Number(settings.prefetch_count ?? 10)));
+    state.ocrMinImageWidth = Math.max(
+      0, Math.min(10000, Number(settings.ocr_min_image_width ?? 150))
+    );
+    state.ocrMinImageHeight = Math.max(
+      0, Math.min(10000, Number(settings.ocr_min_image_height ?? 150))
+    );
 
     translationCacheTtlMs = Math.max(
       30, Math.min(3600, Number(settings.browser_cache_ttl_sec ?? 300))

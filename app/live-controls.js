@@ -328,6 +328,11 @@
       modelsTab.type = "button";
       modelsTab.className = "live-settings-tab";
       modelsTab.textContent = "Modelle";
+      const filterTab = document.createElement("button");
+
+      filterTab.type = "button";
+      filterTab.className = "live-settings-tab";
+      filterTab.textContent = uiText("Filter");
       const adminTab = document.createElement("button");
 
       adminTab.type = "button";
@@ -335,7 +340,8 @@
       adminTab.textContent = "Admin";
       tabs.append(generalTab, accountTab, mangaTab, backupTab);
 
-      if (isAdmin) tabs.append(modelsTab, adminTab);
+      if (isAdmin) tabs.append(modelsTab, filterTab, adminTab);
+      else tabs.append(filterTab);
 
       content.append(tabs);
 
@@ -354,13 +360,19 @@
       const modelsPanel = document.createElement("div");
 
       modelsPanel.className = "live-settings-panel hidden";
+      const filterPanel = document.createElement("div");
+
+      filterPanel.className = "live-settings-panel hidden";
       const adminPanel = document.createElement("div");
 
       adminPanel.className = "live-settings-panel hidden";
       const panels = document.createElement("div");
 
       panels.className = "live-settings-panels";
-      panels.append(generalPanel, accountPanel, mangaPanel, backupPanel, modelsPanel, adminPanel);
+      panels.append(
+        generalPanel, accountPanel, mangaPanel, backupPanel,
+        modelsPanel, filterPanel, adminPanel
+      );
 
       content.append(panels);
 
@@ -374,6 +386,7 @@
         const showManga = name === "manga";
         const showBackup = name === "backup";
         const showModels = name === "models";
+        const showFilter = name === "filter";
         const showAdmin = name === "admin";
         if (!showModels && modelPollTimer) {
           clearTimeout(modelPollTimer);
@@ -382,7 +395,7 @@
         }
 
         generalPanel.classList.toggle(
-          "hidden", showAccount || showManga || showBackup || showModels || showAdmin
+          "hidden", showAccount || showManga || showBackup || showModels || showFilter || showAdmin
         );
 
         accountPanel.classList.toggle("hidden", !showAccount);
@@ -393,10 +406,12 @@
 
         modelsPanel.classList.toggle("hidden", !showModels);
 
+        filterPanel.classList.toggle("hidden", !showFilter);
+
         adminPanel.classList.toggle("hidden", !showAdmin);
 
         generalTab.classList.toggle(
-          "active", !showAccount && !showManga && !showBackup && !showModels && !showAdmin
+          "active", !showAccount && !showManga && !showBackup && !showModels && !showFilter && !showAdmin
         );
 
         accountTab.classList.toggle("active", showAccount);
@@ -406,6 +421,8 @@
         backupTab.classList.toggle("active", showBackup);
 
         modelsTab.classList.toggle("active", showModels);
+
+        filterTab.classList.toggle("active", showFilter);
 
         adminTab.classList.toggle("active", showAdmin);
 
@@ -422,6 +439,8 @@
       mangaTab.addEventListener("click", () => selectTab("manga"));
 
       backupTab.addEventListener("click", () => selectTab("backup"));
+
+      filterTab.addEventListener("click", () => selectTab("filter"));
 
       if (isAdmin) {
         modelsTab.addEventListener("click", () => {
@@ -714,6 +733,39 @@
         "Das Limit entfernt nur ältere Bilder und Übersetzungsergebnisse. " +
         "Bookmark, Lesestatus und Datum bleiben im persönlichen Benutzerkonto erhalten.";
       mangaSettings.append(mangaHint);
+
+      const imageFilterSettings = document.createElement("fieldset");
+
+      imageFilterSettings.className = "live-settings-group";
+      const imageFilterLegend = document.createElement("legend");
+
+      imageFilterLegend.textContent = uiText("OCR- und Übersetzungsfilter");
+      const imageFilterHint = document.createElement("p");
+
+      imageFilterHint.className = "hint";
+      imageFilterHint.textContent = uiText(
+        "Bilder bis einschließlich einer der beiden Grenzgrößen werden weder vom OCR gescannt noch übersetzt. Mit 0 wird die jeweilige Grenze deaktiviert."
+      );
+      const ocrMinImageWidth = field(
+        uiText("Bis Breite überspringen (Pixel)"), s.ocr_min_image_width ?? 150, "number"
+      );
+
+      ocrMinImageWidth.min = "0";
+      ocrMinImageWidth.max = "10000";
+      ocrMinImageWidth.step = "1";
+      const ocrMinImageHeight = field(
+        uiText("Bis Höhe überspringen (Pixel)"), s.ocr_min_image_height ?? 150, "number"
+      );
+
+      ocrMinImageHeight.min = "0";
+      ocrMinImageHeight.max = "10000";
+      ocrMinImageHeight.step = "1";
+      imageFilterSettings.append(
+        imageFilterLegend, imageFilterHint,
+        ocrMinImageWidth.closest(".live-field"),
+        ocrMinImageHeight.closest(".live-field")
+      );
+      filterPanel.append(imageFilterSettings);
 
       const backupSettings = document.createElement("fieldset");
 
@@ -1394,6 +1446,8 @@
             history_limit: Number(historyLimit.value),
             bookmark_chapter_cache_limit: Number(bookmarkCacheLimit.value),
             browser_cache_ttl_sec: Number(ttl.value),
+            ocr_min_image_width: Number(ocrMinImageWidth.value),
+            ocr_min_image_height: Number(ocrMinImageHeight.value),
             lm_studio_base_url: base.value, lm_studio_model: model.value,
             lm_studio_timeout_sec: Number(timeout.value)
 

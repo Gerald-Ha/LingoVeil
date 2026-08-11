@@ -1917,6 +1917,10 @@ input[type="file"] {
   color: #fbbf24;
 }
 
+.thumb-translation-status.filtered {
+  color: var(--muted);
+}
+
 .thumb-translation-status.open {
   color: var(--muted);
 }
