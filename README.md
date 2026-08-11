@@ -81,6 +81,9 @@ For supported manga websites, LingoVeil also detects the title, volume, and chap
 
 Manga can be saved directly as bookmarks in LingoVeil.
 
+<img width="auto" height="500" alt="bookmarked" src="https://github.com/user-attachments/assets/ed270baf-1233-4450-9e8e-c0da7b67c3ef" />
+
+
 LingoVeil remembers, among other things:
 
 - the manga
