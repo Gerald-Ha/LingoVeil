@@ -77,6 +77,37 @@ For supported manga websites, LingoVeil also detects the title, volume, and chap
 
 ---
 
+## Smartphone and Tablet
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" target="_blank">
+        <img height="500" alt="translate2" src="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+
+LingoVeil has a **responsive user interface** that automatically adapts to smaller displays. This means LingoVeil can be used comfortably not only on desktop computers, but also on **smartphones and tablets**.
+
+If your smartphone is connected to the same network as the LingoVeil server, you can access LingoVeil directly through the server's local IP address, for example:
+
+```text
+http://192.168.1.100:8765
+```
+
+If LingoVeil is available through your own domain with HTTPS, you can also access it outside your home network just like a normal website:
+
+```text
+https://lingoveil.example.org
+```
+
+This allows the actual LingoVeil server to run on a PC, home server, or NAS while manga can be comfortably read and translated on a smartphone.
+
+---
+
 ## Bookmarks and Reading Progress
 
 Manga can be saved directly as bookmarks in LingoVeil.
@@ -218,38 +249,6 @@ After that, additional registrations are disabled by default. The administrator 
 The administrator also manages installed models and the optional LM Studio connection.
 
 > **Note:** Multiple users share the same CPU, GPU, and available system memory of the server. Many simultaneous translations may therefore be slower on lower-end hardware.
-
----
-## Smartphone and Tablet
-
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" target="_blank">
-        <img height="500" alt="translate2" src="https://github.com/user-attachments/assets/8e2665df-a010-445e-8df8-ab7a662ac75e" />
-      </a>
-    </td>
-  </tr>
-</table>
-
-
-LingoVeil has a **responsive user interface** that automatically adapts to smaller displays. This means LingoVeil can be used comfortably not only on desktop computers, but also on **smartphones and tablets**.
-
-If your smartphone is connected to the same network as the LingoVeil server, you can access LingoVeil directly through the server's local IP address, for example:
-
-```text
-http://192.168.1.100:8765
-```
-
-If LingoVeil is available through your own domain with HTTPS, you can also access it outside your home network just like a normal website:
-
-```text
-https://lingoveil.example.org
-```
-
-This allows the actual LingoVeil server to run on a PC, home server, or NAS while manga can be comfortably read and translated on a smartphone.
-
-
 
 ---
 # Installation
