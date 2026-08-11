@@ -79,6 +79,8 @@ Bei unterstützten Manga-Seiten erkennt LingoVeil außerdem Titel, Volume und Ch
 
 Mangas können direkt in LingoVeil als Bookmark gespeichert werden.
 
+<img width="auto" height="500" alt="bookmarked" src="https://github.com/user-attachments/assets/ed270baf-1233-4450-9e8e-c0da7b67c3ef" />
+
 Dabei merkt sich LingoVeil unter anderem:
 
 - den Manga
