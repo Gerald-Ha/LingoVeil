@@ -748,7 +748,13 @@ class UserDataStore:
         return [{**dict(row["payload"]), "active": bool(row["active"])} for row in rows]
     def replace_bookmarks(self, user_id: str, bookmarks: list[dict[str, Any]]) -> None:
         with self.database.connection() as connection:
-            connection.execute("DELETE FROM manga_bookmarks WHERE user_id = %s::uuid", (user_id,))
+            # Serialize bookmark replacement across processes/containers for this user.
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                (f"lingoveil-bookmarks:{user_id}",),
+            )
+
+            retained_ids: list[str] = []
 
             for item in bookmarks:
                 url = str(item.get("url", "")).strip()
@@ -756,6 +762,7 @@ class UserDataStore:
                 if not url:
                     continue
                 bookmark_id = str(item.get("id") or hashlib.sha256(url.encode()).hexdigest()[:20])
+                retained_ids.append(bookmark_id)
 
                 connection.execute(
                     """
@@ -763,8 +770,23 @@ class UserDataStore:
 
                     VALUES (%s, %s::uuid, %s, %s::jsonb, %s)
 
+                    ON CONFLICT (user_id, id) DO UPDATE
+                    SET url = EXCLUDED.url, payload = EXCLUDED.payload,
+                        active = EXCLUDED.active, updated_at = now()
+
                     """,
                     (bookmark_id, user_id, url, json.dumps(item), bool(item.get("active", True))),
+                )
+
+            if retained_ids:
+                connection.execute(
+                    "DELETE FROM manga_bookmarks WHERE user_id = %s::uuid AND NOT (id = ANY(%s::text[]))",
+                    (user_id, retained_ids),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM manga_bookmarks WHERE user_id = %s::uuid",
+                    (user_id,),
                 )
 
     def upsert_bookmark(self, user_id: str, item: dict[str, Any], *, active: bool = True) -> None:

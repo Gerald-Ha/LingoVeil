@@ -517,12 +517,16 @@ class MangaBookmarkStore:
 
 class DatabaseMangaBookmarkStore(MangaBookmarkStore):
     pass
+    _user_locks_guard = threading.Lock()
+    _user_locks: dict[str, threading.RLock] = {}
+
     def __init__(self, user_data: Any, user_id: str) -> None:
         self.user_data = user_data
         self.user_id = user_id
         self.path = Path(f"postgresql-bookmarks-{user_id}")
 
-        self._lock = threading.RLock()
+        with self._user_locks_guard:
+            self._lock = self._user_locks.setdefault(user_id, threading.RLock())
 
     def _load(self) -> dict[str, Any]:
         items = self.user_data.load_bookmarks(self.user_id, include_removed=True)

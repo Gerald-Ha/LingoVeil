@@ -1419,6 +1419,66 @@ class LiveSourceTests(unittest.TestCase):
                 "complete",
             )
 
+    def test_parallel_database_bookmark_stores_share_a_per_user_lock(self):
+        import copy
+        import sys
+        import threading
+        import time
+
+        sys.path.insert(0, str(self.root / "src"))
+        from lingoveil_bookmarks import DatabaseMangaBookmarkStore
+
+        class FakeUserData:
+            def __init__(self):
+                self.items = [{
+                    "id": "bookmark-id",
+                    "url": "https://example.test/manga",
+                    "title": "Example",
+                    "active": True,
+                    "cached_chapters": {},
+                }]
+
+            def load_bookmarks(self, user_id, include_removed=False):
+                return copy.deepcopy(self.items)
+
+            def replace_bookmarks(self, user_id, items):
+                time.sleep(0.01)
+                self.items = copy.deepcopy(items)
+
+        user_data = FakeUserData()
+        stores = [
+            DatabaseMangaBookmarkStore(user_data, "same-user")
+            for _ in range(2)
+        ]
+        self.assertIs(stores[0]._lock, stores[1]._lock)
+
+        threads = [
+            threading.Thread(
+                target=store.mark_cached,
+                kwargs={
+                    "manga_url": "https://example.test/manga",
+                    "chapter_url": f"https://example.test/chapter/{index}",
+                    "volume": "1",
+                    "chapter": str(index),
+                    "label": f"Chapter {index}",
+                    "total_pages": 10,
+                },
+            )
+            for index, store in enumerate(stores)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(user_data.items[0]["cached_chapters"]), 2)
+
+        database = (self.root / "src/lingoveil_database.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("pg_advisory_xact_lock(hashtext(%s))", database)
+        self.assertIn("ON CONFLICT (user_id, id) DO UPDATE", database)
+
     def test_progress_backup_restore_ui_and_api_exist(self):
         server = (self.root / "app/live_server.py").read_text(encoding="utf-8")
 

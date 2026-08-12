@@ -29,6 +29,7 @@ Version 3.2.1 fixes translation of text-based PDF files loaded through the URL i
 * Chapter download icons now distinguish an incomplete/queued download (`…`) from a fully processed chapter (`✓`); filtered pages count as processed, while failed or cancelled pages keep the chapter incomplete.
 * Starting a chapter download updates matching open gallery pages immediately and continues synchronizing queued, translating, translated, and failed states without requiring a page refresh.
 * The chapter-selection dialog now shows each chapter's own last-read timestamp. Reading another chapter no longer removes the read marker from previously visited chapters.
+* Concurrent download clicks for multiple chapters of the same bookmark are serialized per user in both the application and PostgreSQL. Atomic bookmark upserts prevent duplicate-primary-key errors and preserve every chapter's cache state.
 
 # LingoVeil 3.1.7
 
