@@ -1,3 +1,35 @@
+# LingoVeil 3.2.1
+
+Version 3.2.1 fixes translation of text-based PDF files loaded through the URL input.
+
+## PDF Translation Fixes
+
+* Selectable PDF text is now extracted directly with its page coordinates and translated without starting OCR.
+* Image-only PDFs and PDF pages without extractable text continue to use EasyOCR as a fallback.
+* PDF translation results now include the target language, group count, text source, and rendered-image URL expected by the web interface.
+* Completed PDF jobs are no longer incorrectly discarded by the browser as results for an outdated target language.
+
+## Mobile Background Queue
+
+* Configured prefetch pages are submitted immediately to the persistent backend queue instead of waiting in a browser-only JavaScript queue.
+* Translation continues on the server when a mobile browser tab is suspended or the phone screen is turned off.
+* Thumbnail states now follow the backend job state and distinguish queued work from the page currently being translated.
+
+## Bookmark Chapter Downloads
+
+* Every chapter in a bookmarked manga now has a download-arrow action that queues the complete chapter for translation.
+* Chapter pages are submitted to the persistent backend queue in one action and remain available through the bookmark/history cache for later reading without translation delays.
+* Downloading a chapter does not mark it as read or alter the last-read position.
+* Cached chapters are tracked separately and pruned according to **Saved chapters per bookmark (0 = unlimited)**; `0` keeps all downloaded chapters.
+* Reopened chapters now restore active backend states for every page, showing queued, translating, and translated pages accurately instead of displaying them as open.
+* Selecting a page already present in the chapter-download queue reuses its existing job rather than creating a duplicate behind the whole chapter.
+* Bookmark dialogs remain available while translations run, and dynamic thumbnail states follow the selected interface language.
+* Image dimensions are resolved before filtering or automatic prefetch, preventing short banners and logos from starting translation before their size is known.
+* Gallery selection is no longer globally blocked by another page's translation; cached translated pages open immediately, while stale async results cannot overwrite the newly selected preview.
+* Chapter download icons now distinguish an incomplete/queued download (`…`) from a fully processed chapter (`✓`); filtered pages count as processed, while failed or cancelled pages keep the chapter incomplete.
+* Starting a chapter download updates matching open gallery pages immediately and continues synchronizing queued, translating, translated, and failed states without requiring a page refresh.
+* The chapter-selection dialog now shows each chapter's own last-read timestamp. Reading another chapter no longer removes the read marker from previously visited chapters.
+
 # LingoVeil 3.1.7
 
 Version 3.1.7 improves the English interface language, adds image filtering controls, expands LingoVeil with a fully local Ollama/TranslateGemma integration, and improves memory efficiency during longer Docker sessions.

@@ -86,6 +86,7 @@ class MangaBookmarkStore:
         return {
             **item,
             "chapters": item.get("chapters", {}),
+            "cached_chapters": item.get("cached_chapters", {}),
             "chapter_count": int(item.get("chapter_count", 0) or 0),
             "known_chapter_urls": list(item.get("known_chapter_urls", [])),
             "known_chapters": list(item.get("known_chapters", [])),
@@ -193,6 +194,7 @@ class MangaBookmarkStore:
                 "last_read_url": (previous or {}).get("last_read_url", ""),
                 "last_read_at": (previous or {}).get("last_read_at", ""),
                 "chapters": (previous or {}).get("chapters", {}),
+                "cached_chapters": (previous or {}).get("cached_chapters", {}),
                 "chapter_count": (
                     len(snapshot)
 
@@ -240,6 +242,83 @@ class MangaBookmarkStore:
             self._save(data)
 
             return bookmark
+    def mark_cached(
+        self,
+        *,
+        manga_url: str,
+        chapter_url: str,
+        volume: str,
+        chapter: str,
+        label: str,
+        total_pages: int = 0,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            data = self._load()
+            bookmark = next(
+                (
+                    item for item in data["bookmarks"]
+                    if item.get("url") == manga_url.strip()
+                ),
+                None,
+            )
+            if bookmark is None:
+                return None
+
+            now = self._now()
+            bookmark.setdefault("cached_chapters", {})[chapter_url] = {
+                "url": chapter_url,
+                "volume": volume,
+                "chapter": chapter,
+                "label": label,
+                "cached_at": now,
+                "status": "queued",
+                "total_pages": max(0, int(total_pages)),
+                "completed_page_keys": [],
+            }
+            bookmark["updated_at"] = now
+            data["bookmarks"] = [
+                bookmark,
+                *[
+                    item for item in data["bookmarks"]
+                    if item.get("url") != manga_url.strip()
+                ],
+            ]
+            self._save(data)
+            return self._normalized(bookmark)
+    def record_cached_page(
+        self,
+        *,
+        chapter_url: str,
+        page_key: str,
+        total_pages: int,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            data = self._load()
+            bookmark = next(
+                (
+                    item for item in data["bookmarks"]
+                    if chapter_url in item.get("cached_chapters", {})
+                ),
+                None,
+            )
+            if bookmark is None:
+                return None
+
+            cached = bookmark.setdefault("cached_chapters", {})[chapter_url]
+            completed = set(cached.get("completed_page_keys", []))
+            if page_key:
+                completed.add(page_key)
+            expected = max(0, int(total_pages or cached.get("total_pages", 0)))
+            cached["total_pages"] = expected
+            cached["completed_page_keys"] = sorted(completed)
+            cached["completed_pages"] = len(completed)
+            cached["status"] = (
+                "complete" if expected > 0 and len(completed) >= expected else "queued"
+            )
+            cached["updated_at"] = self._now()
+            bookmark["updated_at"] = cached["updated_at"]
+            self._save(data)
+            return self._normalized(bookmark)
     def remove(self, url: str, *, delete_reading_data: bool) -> None:
         with self._lock:
             data = self._load()
@@ -302,6 +381,15 @@ class MangaBookmarkStore:
                 "label": label,
                 "read_at": now,
             }
+            cached = bookmark.setdefault("cached_chapters", {}).setdefault(
+                chapter_url,
+                {"url": chapter_url, "cached_at": now},
+            )
+            cached.update({
+                "volume": volume,
+                "chapter": chapter,
+                "label": label,
+            })
 
             bookmark["last_read_url"] = chapter_url
             bookmark["last_read_at"] = now
@@ -415,8 +503,8 @@ class MangaBookmarkStore:
             return set()
 
         chapters = sorted(
-            bookmark.get("chapters", {}).values(),
-            key=lambda item: str(item.get("read_at", "")),
+            bookmark.get("cached_chapters", {}).values(),
+            key=lambda item: str(item.get("cached_at", "")),
             reverse=True,
         )
 

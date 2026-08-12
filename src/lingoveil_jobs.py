@@ -155,6 +155,47 @@ class FairTranslationQueue:
             "result": row["translated_result"],
         }
 
+    def active_for_image_ids(
+        self,
+        user_id: str,
+        image_ids: list[str],
+    ) -> dict[str, dict[str, str]]:
+        if not image_ids:
+            return {}
+        with self.database.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id::text AS id, status, payload->>'image_id' AS image_id
+                FROM translation_jobs
+                WHERE user_id = %s::uuid
+                  AND status IN ('queued', 'running')
+                  AND payload->>'image_id' = ANY(%s)
+                """,
+                (user_id, image_ids),
+            ).fetchall()
+        return {
+            str(row["image_id"]): {
+                "job_id": str(row["id"]),
+                "status": str(row["status"]),
+            }
+            for row in rows
+            if row.get("image_id")
+        }
+
+    def statuses(self, user_id: str, job_ids: list[str]) -> dict[str, str]:
+        if not job_ids:
+            return {}
+        with self.database.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id::text AS id, status
+                FROM translation_jobs
+                WHERE user_id = %s::uuid AND id = ANY(%s::uuid[])
+                """,
+                (user_id, job_ids),
+            ).fetchall()
+        return {str(row["id"]): str(row["status"]) for row in rows}
+
     def _next(self) -> _Work | None:
         with self._condition:
             while not self._stopping and not self._users:

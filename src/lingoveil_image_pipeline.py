@@ -5,6 +5,7 @@ import re
 import socket
 import tempfile
 
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,14 @@ class SizeLimitError(ValueError):
     pass
 class GifNotAllowedError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class PdfTextBlock:
+    bbox: tuple[float, float, float, float]
+    text: str
+
+
 def is_gif_bytes(data: bytes) -> bool:
     return data.startswith((b"GIF87a", b"GIF89a"))
 
@@ -335,6 +344,61 @@ def render_pdf_page(pdf_path: Path, page_number: int) -> Image.Image:
 
         return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
+    finally:
+        doc.close()
+
+
+def extract_pdf_page_text_blocks(
+    pdf_path: Path,
+    page_number: int,
+    *,
+    rendered_width: int,
+    rendered_height: int,
+) -> list[PdfTextBlock]:
+    """Extract selectable PDF text and map its boxes to the rendered page image."""
+    import fitz
+
+    if pdf_path.stat().st_size > MAX_PDF_BYTES:
+        raise SizeLimitError("PDF-Datei zu groß")
+
+    doc = fitz.open(pdf_path)
+    try:
+        if page_number < 0 or page_number >= doc.page_count:
+            raise ValueError("Ungültige Seitennummer")
+
+        page = doc.load_page(page_number)
+        page_rect = page.rect
+        if page_rect.width <= 0 or page_rect.height <= 0:
+            return []
+
+        scale_x = rendered_width / page_rect.width
+        scale_y = rendered_height / page_rect.height
+        blocks: list[PdfTextBlock] = []
+        for raw in page.get_text("blocks", sort=True):
+            if len(raw) < 7 or int(raw[6]) != 0:
+                continue
+
+            text = re.sub(r"\s+", " ", str(raw[4])).strip()
+            if not text or not any(char.isalpha() for char in text):
+                continue
+
+            x0, y0, x1, y1 = (float(raw[index]) for index in range(4))
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            blocks.append(
+                PdfTextBlock(
+                    bbox=(
+                        (x0 - page_rect.x0) * scale_x,
+                        (y0 - page_rect.y0) * scale_y,
+                        (x1 - page_rect.x0) * scale_x,
+                        (y1 - page_rect.y0) * scale_y,
+                    ),
+                    text=text,
+                )
+            )
+
+        return blocks
     finally:
         doc.close()
 

@@ -161,6 +161,13 @@ class PageImageRequest(BaseModel):
     image_id: str
     engine: str = TRANSLATION_ENGINE_BERGAMOT
     force: bool = False
+class PageImageBatchRequest(BaseModel):
+    items: list[PageImageRequest] = Field(min_length=1, max_length=100)
+class BookmarkChapterDownloadRequest(BaseModel):
+    chapter_url: str
+    engine: str = TRANSLATION_ENGINE_BERGAMOT
+class TranslationJobStatusesRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1, max_length=100)
 class LoginRequest(BaseModel):
     username: str = Field(default="", max_length=64)
 
@@ -409,9 +416,34 @@ def create_app(
 
     @app.post("/api/url/page-images")
 
-    def url_page_images(body: UrlRequest, _: None = Depends(require_token)):
+    def url_page_images(
+        body: UrlRequest,
+        request: Request,
+        _: None = Depends(require_token),
+    ):
         try:
-            return pipeline.analyze_page_images(body.url)
+            result = pipeline.analyze_page_images(body.url)
+            user = getattr(request.state, "user", None)
+            if job_queue is not None and user is not None:
+                aliases = {
+                    image_id
+                    for item in result.get("images", [])
+                    for image_id in pipeline.page_image_aliases(str(item.get("id", "")))
+                }
+                active = job_queue.active_for_image_ids(str(user["id"]), sorted(aliases))
+                for item in result.get("images", []):
+                    match = next(
+                        (
+                            active[alias]
+                            for alias in pipeline.page_image_aliases(str(item.get("id", "")))
+                            if alias in active
+                        ),
+                        None,
+                    )
+                    if match:
+                        item["translation_job_status"] = match["status"]
+                        item["translation_job_id"] = match["job_id"]
+            return result
 
         except Exception as exc:
             return _api_error(exc)
@@ -437,6 +469,19 @@ def create_app(
 
             return Response(content=png, media_type="image/png")
 
+        except Exception as exc:
+            return _api_error(exc)
+
+    @app.get("/api/pdf-rendered/{rendered_id}")
+    def pdf_rendered_image(
+        rendered_id: str,
+        _: None = Depends(require_token),
+    ) -> FileResponse:
+        try:
+            return FileResponse(
+                pipeline.pdf_rendered_image_path(rendered_id),
+                media_type="image/png",
+            )
         except Exception as exc:
             return _api_error(exc)
 
@@ -596,6 +641,13 @@ def create_app(
 
             target_language = str(job_settings.get("target_language", "deu"))
 
+            active = job_queue.active_for_image_ids(
+                str(user["id"]), pipeline.page_image_aliases(body.image_id)
+            )
+            if active:
+                existing = next(iter(active.values()))
+                return {"job_id": existing["job_id"], "status": existing["status"]}
+
             def task():
                 with pipeline.bind_user_stores(bookmarks, history):
                     if job_settings:
@@ -605,7 +657,7 @@ def create_app(
 
             work = job_queue.enqueue(
                 user["id"],
-                f"page-image:{body.image_id}:{engine}:{target_language}:{body.force}",
+                f"page-image:{pipeline.page_image_job_key(body.image_id)}:{engine}:{target_language}:{body.force}",
                 {
                     "kind": "page-image", "image_id": body.image_id,
                     "engine": engine, "target_language": target_language,
@@ -616,6 +668,127 @@ def create_app(
 
             return {"job_id": work.job_id, "status": "queued"}
 
+        except Exception as exc:
+            return _api_error(exc)
+
+    @app.post("/api/translation-jobs/page-images")
+    def enqueue_page_images(
+        body: PageImageBatchRequest,
+        request: Request,
+        _: None = Depends(require_token),
+    ) -> dict[str, Any]:
+        try:
+            if job_queue is None:
+                raise HTTPException(status_code=503, detail="Hintergrundaufträge sind nicht verfügbar")
+
+            user = getattr(request.state, "user", None)
+            job_settings = (
+                user_settings_provider(str(user["id"]))
+                if user_settings_provider is not None and user is not None else {}
+            )
+            target_language = str(job_settings.get("target_language", "deu"))
+            bookmarks, history = pipeline.bookmarks, pipeline.history
+            jobs = []
+
+            for item in body.items:
+                engine = validate_translation_engine(item.engine)
+                if engine == TRANSLATION_ENGINE_LM_STUDIO and user and not user["is_admin"]:
+                    raise HTTPException(status_code=403, detail="LM Studio ist nur für Administratoren verfügbar")
+
+                def task(body_item=item, engine_name=engine):
+                    with pipeline.bind_user_stores(bookmarks, history):
+                        if job_settings:
+                            pipeline.apply_live_settings(job_settings)
+                        return pipeline.process_page_image(
+                            body_item.image_id, engine_name, force=body_item.force
+                        )
+
+                work = job_queue.enqueue(
+                    user["id"],
+                    f"page-image:{pipeline.page_image_job_key(item.image_id)}:{engine}:{target_language}:{item.force}",
+                    {
+                        "kind": "page-image", "image_id": item.image_id,
+                        "engine": engine, "target_language": target_language,
+                        "force": item.force,
+                    },
+                    task,
+                )
+                jobs.append({
+                    "image_id": item.image_id,
+                    "job_id": work.job_id,
+                    "status": "queued",
+                })
+
+            return {"jobs": jobs}
+        except Exception as exc:
+            return _api_error(exc)
+
+    @app.post("/api/translation-jobs/bookmark-chapter")
+    def enqueue_bookmark_chapter(
+        body: BookmarkChapterDownloadRequest,
+        request: Request,
+        _: None = Depends(require_token),
+    ) -> dict[str, Any]:
+        try:
+            if job_queue is None:
+                raise HTTPException(status_code=503, detail="Hintergrundaufträge sind nicht verfügbar")
+
+            engine = validate_translation_engine(body.engine)
+            user = getattr(request.state, "user", None)
+            if engine == TRANSLATION_ENGINE_LM_STUDIO and user and not user["is_admin"]:
+                raise HTTPException(status_code=403, detail="LM Studio ist nur für Administratoren verfügbar")
+
+            job_settings = (
+                user_settings_provider(str(user["id"]))
+                if user_settings_provider is not None and user is not None else {}
+            )
+            target_language = str(job_settings.get("target_language", "deu"))
+            bookmarks, history = pipeline.bookmarks, pipeline.history
+            chapter = pipeline.prepare_bookmark_chapter_download(body.chapter_url)
+            jobs = []
+            total_pages = len(chapter.get("images", []))
+
+            for page in chapter.get("images", []):
+                image_id = str(page.get("id", ""))
+                page_key = str(page.get("history_image_key", ""))
+                if not image_id:
+                    continue
+
+                def task(page_image_id=image_id, history_image_key=page_key):
+                    with pipeline.bind_user_stores(bookmarks, history):
+                        if job_settings:
+                            pipeline.apply_live_settings(job_settings)
+                        result = pipeline.process_page_image(page_image_id, engine, force=False)
+                        bookmarks.record_cached_page(
+                            chapter_url=body.chapter_url,
+                            page_key=history_image_key,
+                            total_pages=total_pages,
+                        )
+                        return result
+
+                work = job_queue.enqueue(
+                    user["id"],
+                    f"page-image:{pipeline.page_image_job_key(image_id)}:{engine}:{target_language}:False",
+                    {
+                        "kind": "bookmark-chapter", "chapter_url": body.chapter_url,
+                        "image_id": image_id, "engine": engine,
+                        "target_language": target_language, "force": False,
+                    },
+                    task,
+                )
+                jobs.append({
+                    "image_id": image_id,
+                    "history_image_key": page_key,
+                    "job_id": work.job_id,
+                    "status": "queued",
+                })
+
+            return {
+                "chapter_url": body.chapter_url,
+                "page_count": len(jobs),
+                "jobs": jobs,
+                "cache_limit": pipeline.bookmark_chapter_cache_limit,
+            }
         except Exception as exc:
             return _api_error(exc)
 
@@ -690,6 +863,22 @@ def create_app(
             raise HTTPException(status_code=404, detail="Übersetzungsauftrag nicht gefunden")
 
         return result
+
+    @app.post("/api/translation-jobs/statuses")
+    def translation_job_statuses(
+        body: TranslationJobStatusesRequest,
+        request: Request,
+        _: None = Depends(require_token),
+    ) -> dict[str, Any]:
+        user = getattr(request.state, "user", None)
+        try:
+            statuses = (
+                job_queue.statuses(str(user["id"]), body.job_ids)
+                if job_queue else {}
+            )
+            return {"statuses": statuses}
+        except Exception as exc:
+            return _api_error(exc)
     @app.get("/api/rendered")
 
     def get_rendered(_: None = Depends(require_token)) -> FileResponse:

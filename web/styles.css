@@ -1291,46 +1291,74 @@ input[type="file"] {
 }
 
 .manga-chapter-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.manga-chapter-entry:hover,
+.manga-chapter-entry:focus-within {
+  border-color: var(--accent);
+}
+
+.manga-chapter-open {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
   padding: 10px 11px;
-  overflow: hidden;
   color: var(--text);
-
   text-align: left;
-  background: var(--panel);
-
-  border: 1px solid var(--border);
-
-  border-radius: 9px;
+  background: transparent;
+  border: 0;
   cursor: pointer;
 }
 
-.manga-chapter-entry:hover,
-.manga-chapter-entry:focus-visible {
-  border-color: var(--accent);
-
-  outline: none;
-}
-
-.manga-chapter-entry > span {
+.manga-chapter-open > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.manga-chapter-entry small {
+.manga-chapter-open small {
   color: #86efac;
   font-size: 0.66rem;
 }
 
-.manga-chapter-entry.last-read {
+.manga-chapter-open.last-read {
   background: rgba(34, 197, 94, 0.14);
-
-  border-color: #4ade80;
   box-shadow: inset 3px 0 0 #4ade80;
+}
+
+.manga-chapter-download {
+  padding: 0;
+  color: var(--accent);
+  font-size: 1.25rem;
+  font-weight: 800;
+  background: rgba(79, 209, 197, 0.08);
+  border: 0;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.manga-chapter-download:hover,
+.manga-chapter-download:focus-visible {
+  color: var(--text);
+  background: rgba(79, 209, 197, 0.2);
+  outline: none;
+}
+
+.manga-chapter-download.loading {
+  color: var(--muted);
+}
+
+.manga-chapter-download.queued {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.14);
 }
 
 .bookmark-remove-dialog {

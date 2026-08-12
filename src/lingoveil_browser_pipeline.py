@@ -32,6 +32,7 @@ from lingoveil_image_pipeline import (
     MAX_IMAGE_BYTES,
     MAX_PDF_BYTES,
     download_url_bytes,
+    extract_pdf_page_text_blocks,
     extract_page_images,
     fetch_page_html,
     is_pdf_bytes,
@@ -138,6 +139,7 @@ class BrowserTranslationPipeline:
         self._pdf_preview_cache: dict[tuple[str, int], bytes] = {}
 
         self._pdf_preview_cache_limit = 48
+        self._pdf_rendered_images: dict[str, Path] = {}
         self._closed = False
         data_dir = Path(os.environ.get("LINGOVEIL_LIVE_DATA_DIR", "/app/data"))
 
@@ -1064,7 +1066,33 @@ class BrowserTranslationPipeline:
 
         engine_name = validate_translation_engine(engine_name)
 
-        groups, _ = self._run_ocr(page_image)
+        pdf_text_blocks = extract_pdf_page_text_blocks(
+            pdf_path,
+            page_number,
+            rendered_width=page_image.width,
+            rendered_height=page_image.height,
+        )
+        if pdf_text_blocks:
+            groups = [
+                GroupedTextBlock(
+                    id=index,
+                    bbox=block.bbox,
+                    text=block.text,
+                    lines=[],
+                    average_confidence=1.0,
+                    min_confidence=1.0,
+                    ocr_run=0,
+                )
+                for index, block in enumerate(pdf_text_blocks, start=1)
+            ]
+            text_source = "pdf_text"
+            self._log(
+                f"PDF-Text: {len(groups)} Textblöcke extrahiert; OCR übersprungen"
+            )
+        else:
+            groups, _ = self._run_ocr(page_image)
+            text_source = "ocr"
+            self._log("PDF enthält keinen extrahierbaren Text; OCR-Fallback verwendet")
 
         translations = self._translate_groups(groups, engine_name)
 
@@ -1075,17 +1103,31 @@ class BrowserTranslationPipeline:
             rendered_image=rendered,
             infos=infos,
             engine_name=engine_name,
-            extra={"pdf_page": page_number},
+            extra={"pdf_page": page_number, "text_source": text_source},
             pdf_page=True,
         )
+
+        rendered_id = uuid.uuid4().hex
+        rendered_result_path = self.session_dir / f"pdf-rendered-{rendered_id}.png"
+        shutil.copyfile(rendered, rendered_result_path)
+        if len(self._pdf_rendered_images) >= self._pdf_preview_cache_limit:
+            oldest_id = next(iter(self._pdf_rendered_images))
+            oldest_path = self._pdf_rendered_images.pop(oldest_id)
+            oldest_path.unlink(missing_ok=True)
+        self._pdf_rendered_images[rendered_id] = rendered_result_path
 
         rendered.unlink(missing_ok=True)
 
         return {
             "engine": engine_name,
+            "target_language": self._target_language(engine_name),
+            "engine_display_name": engine_display_name(engine_name),
             "page_number": page_number,
             "page_count": pdf_page_count(pdf_path),
             "groups": infos,
+            "group_count": len(infos),
+            "text_source": text_source,
+            "rendered_url": f"/api/pdf-rendered/{rendered_id}",
             "rendered_image_path": paths["rendered_image_path"],
             "input_image_path": paths["input_image_path"],
             "json_path": paths["json_path"],
@@ -1109,6 +1151,12 @@ class BrowserTranslationPipeline:
             raise ValueError("Unbekannte PDF-ID")
 
         return self.process_pdf_page(path, page_number, engine_name)
+
+    def pdf_rendered_image_path(self, rendered_id: str) -> Path:
+        path = self._pdf_rendered_images.get(rendered_id)
+        if path is None or not path.is_file():
+            raise ValueError("Unbekanntes PDF-Übersetzungsbild")
+        return path
 
     def download_image_url(self, url: str) -> str:
         validate_remote_url(url)
@@ -1173,7 +1221,7 @@ class BrowserTranslationPipeline:
 
         self._pdf_preview_cache[cache_key] = png
         return png
-    def analyze_page_images(self, url: str) -> dict[str, Any]:
+    def analyze_page_images(self, url: str, *, mark_read: bool = True) -> dict[str, Any]:
         validate_remote_url(url)
 
         metadata = self._catalog_chapter_metadata.get(url, {})
@@ -1190,7 +1238,8 @@ class BrowserTranslationPipeline:
                 metadata=metadata,
             )
 
-            self._record_bookmark_read(history_entry)
+            if mark_read:
+                self._record_bookmark_read(history_entry)
 
             return self._register_history_entry(history_entry)
 
@@ -1209,7 +1258,8 @@ class BrowserTranslationPipeline:
                 metadata=metadata,
             )
 
-            self._record_bookmark_read(history_entry)
+            if mark_read:
+                self._record_bookmark_read(history_entry)
 
             return self._register_history_entry(history_entry)
 
@@ -1224,9 +1274,34 @@ class BrowserTranslationPipeline:
             metadata=metadata,
         )
 
-        self._record_bookmark_read(history_entry)
+        if mark_read:
+            self._record_bookmark_read(history_entry)
 
         return self._register_history_entry(history_entry)
+
+    def prepare_bookmark_chapter_download(self, chapter_url: str) -> dict[str, Any]:
+        navigation = self.bookmarks.chapter_navigation(chapter_url)
+        if not navigation.get("enabled"):
+            raise ValueError("Das Chapter gehört zu keinem aktiven Bookmark")
+
+        result = self.analyze_page_images(chapter_url, mark_read=False)
+        metadata = self._catalog_chapter_metadata.get(chapter_url, {})
+        manga_url = str(navigation.get("manga_url", ""))
+        self.bookmarks.mark_cached(
+            manga_url=manga_url,
+            chapter_url=chapter_url,
+            volume=str(metadata.get("volume", "")),
+            chapter=str(
+                metadata.get("chapter", "") or navigation.get("chapter", "")
+            ),
+            label=str(
+                metadata.get("chapter_label", "")
+                or navigation.get("chapter_label", "")
+            ),
+            total_pages=len(result.get("images", [])),
+        )
+        self._enforce_bookmark_cache_limit(manga_url)
+        return result
 
     def analyze_manga_catalog(self, url: str) -> dict[str, Any]:
         catalog = resolve_manga_catalog(url, log_fn=self._log)
@@ -1241,6 +1316,7 @@ class BrowserTranslationPipeline:
         catalog["last_read_at"] = (bookmark or {}).get("last_read_at", "")
 
         catalog["read_chapters"] = (bookmark or {}).get("chapters", {})
+        catalog["cached_chapters"] = (bookmark or {}).get("cached_chapters", {})
 
         catalog["new_chapters"] = (bookmark or {}).get("new_chapters", [])
 
@@ -1557,6 +1633,7 @@ class BrowserTranslationPipeline:
                 {
                     "id": image_id,
                     "history_id": entry["id"],
+                    "history_image_key": item["key"],
                     "url": image_url,
                     "preview_url": preview_url,
                     "translated_engines": sorted(translated_engines),
@@ -1670,6 +1747,25 @@ class BrowserTranslationPipeline:
         load_image_bytes(data)
 
         return self._remember_page_image_preview(image_id, data, content_type)
+
+    def page_image_source_key(self, image_id: str) -> tuple[str, str] | None:
+        return self._page_image_history.get(image_id)
+
+    def page_image_aliases(self, image_id: str) -> list[str]:
+        source_key = self.page_image_source_key(image_id)
+        if source_key is None:
+            return [image_id]
+        return [
+            candidate_id
+            for candidate_id, candidate_key in self._page_image_history.items()
+            if candidate_key == source_key
+        ]
+
+    def page_image_job_key(self, image_id: str) -> str:
+        source_key = self.page_image_source_key(image_id)
+        if source_key is None:
+            return image_id
+        return f"{source_key[0]}:{source_key[1]}"
 
     def _remember_page_image_preview(
         self,

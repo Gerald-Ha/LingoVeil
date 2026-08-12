@@ -15,6 +15,7 @@ const queuedTranslationItems = new Set();
 
 const translationQueue = [];
 let translationQueueActive = false;
+let selectionGeneration = 0;
 let thumbPreviewActive = 0;
 const thumbPreviewQueue = [];
 let thumbObserver = null;
@@ -550,7 +551,7 @@ function resetThumbPreviewQueue() {
   thumbPreviewQueue.length = 0;
 }
 
-async function translatePageImageSilent(item, engine) {
+async function translatePageImageSilent(item, engine, existingJob = null) {
   if (!imagePassesOcrFilter(item)) return;
 
   const imageId = item.id;
@@ -567,53 +568,50 @@ async function translatePageImageSilent(item, engine) {
   updateQueuedItemStatus(imageId);
 
   try {
-    await enqueueTranslation(async () => {
-      queuedTranslationItems.delete(queueKey);
-
+    const onStatus = (status) => {
+      setItemTranslating(imageId, engine, status === "running");
       updateQueuedItemStatus(imageId);
+    };
 
-      try {
-        setItemTranslating(imageId, engine, true);
+    // Submit every prefetch item immediately. The durable server queue must own
+    // the work before a mobile browser can suspend this page.
+    const result = existingJob
+      ? await waitForTranslationBackgroundJob(existingJob, {onStatus})
+      : item.pdf_id != null
+        ? await runTranslationBackgroundJob("pdf-page", {
+          pdf_id: item.pdf_id,
+          page_number: item.page_number ?? 0,
+          engine,
+        }, {onStatus})
 
-        const result = item.pdf_id != null
-          ? await runTranslationBackgroundJob("pdf-page", {
-              pdf_id: item.pdf_id,
-              page_number: item.page_number ?? 0,
-              engine,
-            })
+        : await runTranslationBackgroundJob("page-image", {
+          image_id: imageId,
+          engine,
+        }, {onStatus});
 
-          : await runTranslationBackgroundJob("page-image", {
-              image_id: imageId,
-              engine,
-            });
+    if (String(result.target_language || "") !== engineTargetLanguage(engine)) {
+      console.info(
+        `Veraltete Vorab-Übersetzung verworfen: ${result.target_language || "unbekannt"}`
+      );
 
-        if (String(result.target_language || "") !== engineTargetLanguage(engine)) {
-          console.info(
-            `Veraltete Vorab-Übersetzung verworfen: ${result.target_language || "unbekannt"}`
-          );
+      return;
+    }
 
-          return;
-        }
+    if (result.filtered) return;
 
-        if (result.filtered) return;
+    if (!Array.isArray(item.translated_engines)) item.translated_engines = [];
+    if (!item.translated_engines.includes(result.engine || engine)) {
+      item.translated_engines.push(result.engine || engine);
+    }
 
-        if (!Array.isArray(item.translated_engines)) item.translated_engines = [];
-        if (!item.translated_engines.includes(result.engine || engine)) {
-          item.translated_engines.push(result.engine || engine);
-        }
+    if (galleryItemById(imageId)) {
+      await storeTranslationCache(key, result, imageId);
+    }
 
-        if (galleryItemById(imageId)) {
-          await storeTranslationCache(key, result, imageId);
-        }
+    markItemTranslated(imageId, result.engine || engine);
 
-        markItemTranslated(imageId, result.engine || engine);
-
-        const label = item ? `#${item.index + 1}` : imageId;
-        console.info(`Vorab-Übersetzung bereit: ${label} (${engineLabel(engine)})`);
-      } finally {
-        setItemTranslating(imageId, engine, false);
-      }
-    }, {key: queueKey});
+    const label = item ? `#${item.index + 1}` : imageId;
+    console.info(`Vorab-Übersetzung bereit: ${label} (${engineLabel(engine)})`);
   } catch (err) {
     console.warn(`Vorab-Übersetzung fehlgeschlagen (${imageId}):`, err.message);
 
@@ -624,6 +622,8 @@ async function translatePageImageSilent(item, engine) {
       );
     }
   } finally {
+    setItemTranslating(imageId, engine, false);
+
     queuedTranslationItems.delete(queueKey);
 
     prefetchInFlight.delete(imageId);
@@ -638,11 +638,43 @@ async function waitForPrefetch(imageId) {
   }
 }
 
-function enqueuePrefetchImages(images, engine = selectedEngine()) {
+async function enqueuePrefetchImages(images, engine = selectedEngine()) {
   if (state.prefetchCount <= 0) return;
-  images.slice(0, state.prefetchCount).forEach((item) => {
-    void translatePageImageSilent(item, engine);
+  const selected = images.slice(0, state.prefetchCount);
+  await Promise.all(selected.map((item) => ensureGalleryItemDimensions(item)));
+  const pageItems = selected.filter((item) => {
+    if (item.pdf_id != null || !imagePassesOcrFilter(item)) return false;
+    const queueKey = translationItemKey(item.id, engine);
+    const cacheKey = pageImageCacheKey(item.id, engine);
+    return !getCachedTranslation(cacheKey)
+      && !itemIsTranslated(item, engine)
+      && !queuedTranslationItems.has(queueKey);
   });
+
+  if (pageItems.length) {
+    try {
+      const response = await api("/api/translation-jobs/page-images", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          items: pageItems.map((item) => ({image_id: item.id, engine, force: false})),
+        }),
+      });
+      const jobsByImage = new Map(
+        (response.jobs || []).map((job) => [job.image_id, job]),
+      );
+      pageItems.forEach((item) => {
+        void translatePageImageSilent(item, engine, jobsByImage.get(item.id) || null);
+      });
+    } catch (err) {
+      console.warn("Backend-Batch-Warteschlange nicht verfügbar:", err.message);
+      pageItems.forEach((item) => void translatePageImageSilent(item, engine));
+    }
+  }
+
+  selected
+    .filter((item) => item.pdf_id != null)
+    .forEach((item) => void translatePageImageSilent(item, engine));
 }
 
 function imagePassesOcrFilter(item) {
@@ -733,9 +765,11 @@ function renderHistory(entries) {
       metadata.chapter ? `Chapter ${metadata.chapter}` : "",
     ].filter(Boolean).join(" · ");
 
+    const translatedImages = window.LingoVeilI18n?.t("Bilder übersetzt")
+      || "Bilder übersetzt";
     meta.textContent =
       `${location ? `${location} · ` : ""}` +
-      `${entry.translated_count}/${entry.image_count} Bilder übersetzt`;
+      `${entry.translated_count}/${entry.image_count} ${translatedImages}`;
     button.append(url, meta);
 
     button.addEventListener("click", () => openHistoryEntry(entry.id));
@@ -792,9 +826,13 @@ function renderBookmarks(bookmarks) {
     const meta = document.createElement("span");
 
     meta.className = "history-meta";
+    const lastReadLabel = window.LingoVeilI18n?.t("Zuletzt gelesen:")
+      || "Zuletzt gelesen:";
+    const noChapterLabel = window.LingoVeilI18n?.t("Noch kein Chapter gelesen")
+      || "Noch kein Chapter gelesen";
     const last = bookmark.last_read_at
-      ? `Zuletzt gelesen: ${formatReadDate(bookmark.last_read_at)}`
-      : "Noch kein Chapter gelesen";
+      ? `${lastReadLabel} ${formatReadDate(bookmark.last_read_at)}`
+      : noChapterLabel;
     meta.textContent = last;
     button.append(title);
 
@@ -911,10 +949,7 @@ async function refreshBookmarkUpdates() {
 }
 
 async function openBookmark(bookmark) {
-  if (state.processing) return;
   showMangaCatalogLoading(bookmark);
-
-  setProcessing(true);
 
   setStatus("Bookmark wird geöffnet …");
 
@@ -936,8 +971,6 @@ async function openBookmark(bookmark) {
     showMangaCatalogError(bookmark, err);
 
     setStatus("Bookmark konnte nicht geöffnet werden.");
-  } finally {
-    setProcessing(false);
   }
 }
 
@@ -1128,7 +1161,7 @@ function isTransientNetworkError(err) {
   return err instanceof TypeError || err?.message === "Failed to fetch";
 }
 
-async function runTranslationBackgroundJob(kind, payload) {
+async function runTranslationBackgroundJob(kind, payload, {onStatus = null} = {}) {
   let job;
   while (!job) {
     try {
@@ -1143,6 +1176,10 @@ async function runTranslationBackgroundJob(kind, payload) {
     }
   }
 
+  return waitForTranslationBackgroundJob(job, {onStatus});
+}
+
+async function waitForTranslationBackgroundJob(job, {onStatus = null} = {}) {
   while (true) {
     let current;
     try {
@@ -1153,6 +1190,8 @@ async function runTranslationBackgroundJob(kind, payload) {
 
       continue;
     }
+
+    if (onStatus) onStatus(current.status);
 
     if (current.status === "succeeded") return current.result;
     if (current.status === "failed" || current.status === "cancelled") {
@@ -1379,6 +1418,118 @@ async function confirmBookmarkRemoval(deleteReadingData) {
   }
 }
 
+async function queueBookmarkChapterDownload(catalog, chapter, button) {
+  if (!catalog.bookmarked) {
+    showUrlLoadError("Bitte den Manga zuerst als Bookmark speichern.");
+    return;
+  }
+
+  button.disabled = true;
+  button.classList.add("loading");
+  button.textContent = "…";
+  try {
+    const result = await api("/api/translation-jobs/bookmark-chapter", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        chapter_url: chapter.url,
+        engine: selectedEngine(),
+      }),
+    });
+    catalog.cached_chapters ||= {};
+    catalog.cached_chapters[chapter.url] = {
+      status: "queued",
+      total_pages: result.page_count || 0,
+    };
+    const jobsByPageKey = new Map(
+      (result.jobs || []).map((job) => [job.history_image_key, job]),
+    );
+    state.galleryImages.forEach((item) => {
+      const job = jobsByPageKey.get(item.history_image_key);
+      if (!job || itemIsTranslated(item, selectedEngine())) return;
+      item.translation_job_status = job.status || "queued";
+      item.translation_job_id = job.job_id || "";
+      updateQueuedItemStatus(item.id);
+    });
+    void monitorBookmarkChapterJobs(result.jobs || [], selectedEngine()).then((complete) => {
+      if (!complete) return;
+      catalog.cached_chapters[chapter.url].status = "complete";
+      button.classList.remove("loading");
+      button.classList.add("queued");
+      button.textContent = "✓";
+      button.title = window.LingoVeilI18n?.t("Chapter ist für Offline-Lesen gespeichert")
+        || "Chapter ist für Offline-Lesen gespeichert";
+    });
+    button.classList.remove("loading");
+    button.classList.add("queued");
+    button.disabled = false;
+    button.textContent = "…";
+    button.title = `${result.page_count || 0} Seiten sind in der Warteschlange`;
+    setStatus(
+      `${chapter.label || "Chapter"}: ${result.page_count || 0} Seiten zur Übersetzung vorgemerkt`
+    );
+  } catch (err) {
+    button.disabled = false;
+    button.classList.remove("loading");
+    button.textContent = "↓";
+    showUrlLoadError(`Chapter konnte nicht vorgemerkt werden.\n\n${err.message}`);
+  }
+}
+
+async function monitorBookmarkChapterJobs(jobs, engine) {
+  const pending = new Map(jobs.map((job) => [job.job_id, job]));
+  let complete = true;
+  while (pending.size) {
+    try {
+      const response = await api("/api/translation-jobs/statuses", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({job_ids: [...pending.keys()]}),
+      });
+      for (const [jobId, job] of pending) {
+        const status = response.statuses?.[jobId];
+        if (!status) continue;
+        const item = state.galleryImages.find(
+          (candidate) => candidate.history_image_key === job.history_image_key,
+        );
+        if (item) {
+          item.translation_job_status = status;
+          updateQueuedItemStatus(item.id);
+        }
+        if (status === "succeeded") {
+          pending.delete(jobId);
+          if (item && imagePassesOcrFilter(item)) {
+            const completed = await api(
+              `/api/translation-jobs/${encodeURIComponent(jobId)}`,
+            );
+            if (completed.result) {
+              await storeTranslationCache(
+                pageImageCacheKey(item.id, engine),
+                completed.result,
+                item.id,
+              );
+              markItemTranslated(item.id, completed.result.engine || engine);
+            }
+          }
+        } else if (status === "failed" || status === "cancelled") {
+          complete = false;
+          pending.delete(jobId);
+          if (item) {
+            item.translation_job_status = "";
+            updateQueuedItemStatus(item.id);
+          }
+        }
+      }
+    } catch (err) {
+      if (!isTransientNetworkError(err)) {
+        console.warn("Chapter-Jobstatus konnte nicht geladen werden:", err.message);
+      }
+    }
+    if (pending.size) await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return complete;
+}
+
 function showMangaCatalog(catalog, {preserveOrder = false} = {}) {
   const dialog = $("manga-catalog-dialog");
 
@@ -1435,9 +1586,10 @@ function showMangaCatalog(catalog, {preserveOrder = false} = {}) {
 
       order.type = "button";
       order.className = "manga-order-button";
-      order.textContent = state.catalogSortAscending
+      const orderLabel = state.catalogSortAscending
         ? "Reihenfolge: invertiert"
         : "Reihenfolge: aktuell";
+      order.textContent = window.LingoVeilI18n?.t(orderLabel) || orderLabel;
       order.addEventListener("click", (event) => {
         event.preventDefault();
 
@@ -1471,21 +1623,27 @@ function showMangaCatalog(catalog, {preserveOrder = false} = {}) {
 
     chapters.className = "manga-chapter-list";
     (group.chapters || []).forEach((chapter) => {
+      const entry = document.createElement("div");
+
+      entry.className = "manga-chapter-entry";
       const button = document.createElement("button");
 
       button.type = "button";
-      button.className = "manga-chapter-entry";
+      button.className = "manga-chapter-open";
       const label = document.createElement("span");
 
       label.textContent = chapter.label || `Chapter ${chapter.chapter || ""}`;
       button.append(label);
 
-      if (chapter.url === catalog.last_read_url) {
+      const readChapter = catalog.read_chapters?.[chapter.url];
+      if (readChapter?.read_at) {
         button.classList.add("last-read");
 
         const readAt = document.createElement("small");
 
-        readAt.textContent = `Zuletzt gelesen: ${formatReadDate(catalog.last_read_at)}`;
+        const lastReadLabel = window.LingoVeilI18n?.t("Zuletzt gelesen:")
+          || "Zuletzt gelesen:";
+        readAt.textContent = `${lastReadLabel} ${formatReadDate(readChapter.read_at)}`;
         button.append(readAt);
       }
 
@@ -1497,7 +1655,33 @@ function showMangaCatalog(catalog, {preserveOrder = false} = {}) {
         $("btn-analyze-page").click();
       });
 
-      chapters.append(button);
+      const download = document.createElement("button");
+
+      download.type = "button";
+      download.className = "manga-chapter-download";
+      download.hidden = !catalog.bookmarked;
+      download.textContent = "↓";
+      download.title = window.LingoVeilI18n?.t("Für Download – gesamtes Chapter übersetzen")
+        || "Für Download – gesamtes Chapter übersetzen";
+      download.setAttribute("aria-label", `${chapter.label || "Chapter"} für Download`);
+      const cachedChapter = catalog.cached_chapters?.[chapter.url];
+      if (cachedChapter?.status === "complete") {
+        download.classList.add("queued");
+        download.textContent = "✓";
+        download.title = window.LingoVeilI18n?.t("Chapter ist für Offline-Lesen gespeichert")
+          || "Chapter ist für Offline-Lesen gespeichert";
+      } else if (cachedChapter?.status === "queued") {
+        download.classList.add("loading");
+        download.textContent = "…";
+        download.title = "Chapter-Download ist unvollständig oder in Bearbeitung";
+      }
+      download.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void queueBookmarkChapterDownload(catalog, chapter, download);
+      });
+
+      entry.append(button, download);
+      chapters.append(entry);
     });
 
     section.append(summary, chapters);
@@ -2089,8 +2273,9 @@ function buildPdfGalleryItems(pdfId, pageCount) {
   }));
 }
 
-async function processSelectedItem(engine, {force = false} = {}) {
-  const item = state.selectedPageImageId ? galleryItemById(state.selectedPageImageId) : null;
+async function processSelectedItem(engine, {force = false, imageId = null} = {}) {
+  const selectedImageId = imageId || state.selectedPageImageId;
+  const item = selectedImageId ? galleryItemById(selectedImageId) : null;
   if (item?.pdf_id != null) {
     return runTranslationBackgroundJob("pdf-page", {
       pdf_id: item.pdf_id,
@@ -2099,19 +2284,39 @@ async function processSelectedItem(engine, {force = false} = {}) {
     });
   }
 
-  if (!state.selectedPageImageId) {
+  if (!selectedImageId) {
     throw new Error("Bitte ein Bild auswählen.");
   }
 
   return runTranslationBackgroundJob("page-image", {
-    image_id: state.selectedPageImageId,
+    image_id: selectedImageId,
     engine,
     force,
   });
 }
 
+async function ensureGalleryItemDimensions(item) {
+  if (!item || (item.width > 0 && item.height > 0) || !item.preview_url) return;
+  await new Promise((resolve) => {
+    const probe = new Image();
+    const done = () => resolve();
+    probe.addEventListener("load", () => {
+      item.width = probe.naturalWidth;
+      item.height = probe.naturalHeight;
+      const thumb = document.querySelector(`.thumb[data-id="${item.id}"]`);
+      const label = thumb?.querySelector(".thumb-label");
+      if (label) updateThumbLabel(label, item);
+      done();
+    }, {once: true});
+    probe.addEventListener("error", done, {once: true});
+    probe.src = item.preview_url;
+  });
+}
+
 async function selectGalleryImage(imageId, { autoTranslate = true } = {}) {
-  if (state.processing) return;
+  const generation = ++selectionGeneration;
+  setProcessing(false);
+  setPreviewProcessing(false);
   resetPreviewFit();
 
   state.selectedPageImageId = imageId;
@@ -2129,6 +2334,9 @@ async function selectGalleryImage(imageId, { autoTranslate = true } = {}) {
 
   const item = state.galleryImages.find((i) => i.id === imageId);
 
+  await ensureGalleryItemDimensions(item);
+  if (generation !== selectionGeneration || state.selectedPageImageId !== imageId) return;
+
   if (item && !imagePassesOcrFilter(item)) {
     const originalSrc = await resolveOriginalSource(item.id);
 
@@ -2140,7 +2348,7 @@ async function selectGalleryImage(imageId, { autoTranslate = true } = {}) {
   if (item) setStatus(`Bild #${item.index + 1} ausgewählt`);
 
   if (autoTranslate && selectedSource() === "page_analyze") {
-    await handleTranslate({ force: false });
+    await handleTranslate({ force: false, selectionToken: generation });
   }
 }
 
@@ -2238,11 +2446,13 @@ function translationItemKey(imageId, engine = selectedEngine()) {
 }
 
 function itemIsTranslating(item, engine = selectedEngine()) {
-  return Boolean(item?.id) && translatingItems.has(translationItemKey(item.id, engine));
+  return item?.translation_job_status === "running"
+    || (Boolean(item?.id) && translatingItems.has(translationItemKey(item.id, engine)));
 }
 
 function itemIsQueued(item, engine = selectedEngine()) {
-  return Boolean(item?.id) && queuedTranslationItems.has(translationItemKey(item.id, engine));
+  return item?.translation_job_status === "queued"
+    || (Boolean(item?.id) && queuedTranslationItems.has(translationItemKey(item.id, engine)));
 }
 
 function updateThumbLabel(label, item) {
@@ -2263,15 +2473,16 @@ function updateThumbLabel(label, item) {
         : translated
           ? "translated"
           : "open";
-  const statusText = filtered
-    ? "· Gefiltert"
+  const rawStatusText = filtered
+    ? "Gefiltert"
     : translating
-      ? "· Wird übersetzt …"
+      ? "Wird übersetzt …"
       : queued
-        ? "· Warteschlange"
+        ? "Warteschlange"
         : translated
-          ? "· Übersetzt"
-          : "· Offen";
+          ? "Übersetzt"
+          : "Offen";
+  const statusText = `· ${window.LingoVeilI18n?.t(rawStatusText) || rawStatusText}`;
   label.replaceChildren(document.createTextNode(`#${item.index + 1} · ${dimText}`));
 
   const status = document.createElement("span");
@@ -2312,6 +2523,7 @@ function markItemTranslated(imageId, engine) {
   const item = galleryItemById(imageId);
 
   if (!item || !engine) return;
+  item.translation_job_status = "succeeded";
   if (!Array.isArray(item.translated_engines)) item.translated_engines = [];
   if (!item.translated_engines.includes(engine)) item.translated_engines.push(engine);
 
@@ -2380,8 +2592,13 @@ async function navigateGallery(delta) {
   if (next) await selectGalleryImage(next.id);
 }
 
-async function handleTranslate({ force = false } = {}) {
+async function handleTranslate({ force = false, selectionToken = selectionGeneration } = {}) {
   if (state.processing) return;
+  const requestedImageId = state.selectedPageImageId;
+  const selectionIsCurrent = () => (
+    selectionToken === selectionGeneration
+    && requestedImageId === state.selectedPageImageId
+  );
   const engine = selectedEngine();
 
   const source = selectedSource();
@@ -2392,6 +2609,8 @@ async function handleTranslate({ force = false } = {}) {
 
   if (filterItem && !imagePassesOcrFilter(filterItem)) {
     const originalSrc = await resolveOriginalSource(filterItem.id);
+
+    if (!selectionIsCurrent()) return;
 
     if (originalSrc) setPreviewSources(null, originalSrc, {resetView: true});
     setStatus(filteredImageStatus(filterItem));
@@ -2412,6 +2631,8 @@ async function handleTranslate({ force = false } = {}) {
 
     const originalSrc = await resolveOriginalSource(state.selectedPageImageId);
 
+    if (!selectionIsCurrent()) return;
+
     if (originalSrc) {
       setPreviewSources(null, originalSrc, {resetView: true});
     }
@@ -2424,6 +2645,7 @@ async function handleTranslate({ force = false } = {}) {
       } catch (err) {
         console.warn("Persistente History-Übersetzung ist unvollständig:", err.message);
       }
+      if (!selectionIsCurrent()) return;
     }
 
     if (!cached) {
@@ -2439,6 +2661,8 @@ async function handleTranslate({ force = false } = {}) {
       );
 
       await waitForPrefetch(state.selectedPageImageId);
+
+      if (!selectionIsCurrent()) return;
 
       cached = getCachedTranslation(cacheKey);
     }
@@ -2468,6 +2692,7 @@ async function handleTranslate({ force = false } = {}) {
     ? await resolveOriginalSource(state.selectedPageImageId)
 
     : null;
+  if (!selectionIsCurrent()) return;
   if (originalSrc) {
     setPreviewSources(null, originalSrc, {resetView: true, processing: true});
   } else {
@@ -2491,7 +2716,7 @@ async function handleTranslate({ force = false } = {}) {
       setStatus(`OCR & Übersetzung mit ${engineLabel(engine)} …`);
 
       result = await enqueueTranslation(
-        () => processSelectedItem(engine, {force}),
+        () => processSelectedItem(engine, {force, imageId: activeTranslationId}),
         {
           key: translationItemKey(activeTranslationId, engine),
           priority: true,
@@ -2501,6 +2726,7 @@ async function handleTranslate({ force = false } = {}) {
       throw new Error("Unbekannte Eingabequelle.");
     }
 
+    if (!selectionIsCurrent()) return;
     state.lastResult = result;
     if (String(result.target_language || "") !== engineTargetLanguage(engine)) {
       throw new Error(
@@ -2523,16 +2749,20 @@ async function handleTranslate({ force = false } = {}) {
     const pageImageId = source === "page_analyze" ? state.selectedPageImageId : null;
     await updatePreview(pageImageId, result);
 
+    if (!selectionIsCurrent()) return;
+
     updatePreviewMeta(result);
 
     updateEngineBadge({ mode: "confirmed", engineId: state.confirmedEngine });
 
     if (source === "page_analyze" && state.selectedPageImageId) {
-      const cacheKey = pageImageCacheKey(state.selectedPageImageId, engine);
+      const cacheKey = pageImageCacheKey(activeTranslationId, engine);
 
-      await storeTranslationCache(cacheKey, result, state.selectedPageImageId);
+      await storeTranslationCache(cacheKey, result, activeTranslationId);
 
-      markItemTranslated(state.selectedPageImageId, result.engine || engine);
+      if (!selectionIsCurrent()) return;
+
+      markItemTranslated(activeTranslationId, result.engine || engine);
 
       prefetchAfterSuccess = true;
     }
@@ -2543,6 +2773,7 @@ async function handleTranslate({ force = false } = {}) {
     const serverEngine = result.engine ? ` [${result.engine}]` : "";
     setStatus(`Fertig – ${groups} Gruppe(n) · ${engineName}${serverEngine}`);
   } catch (err) {
+    if (!selectionIsCurrent()) return;
     setStatus(`Fehler: ${err.message}`);
 
     if (engine === "ollama") {
@@ -2564,15 +2795,15 @@ async function handleTranslate({ force = false } = {}) {
 
     if (!state.currentTranslatedSrc) setPreviewEmpty();
   } finally {
-    setPreviewProcessing(false);
+    if (selectionIsCurrent()) setPreviewProcessing(false);
 
     if (activeTranslationId) setItemTranslating(activeTranslationId, engine, false);
 
-    setProcessing(false);
+    if (selectionIsCurrent()) setProcessing(false);
 
     updateGalleryNavButtons();
 
-    if (prefetchAfterSuccess) schedulePrefetch();
+    if (prefetchAfterSuccess && selectionIsCurrent()) schedulePrefetch();
   }
 }
 
@@ -2798,12 +3029,16 @@ $("btn-analyze-page").addEventListener("click", async () => {
       galleryImages = result.images.map((item, index) => ({
         id: item.id,
         history_id: item.history_id || result.history_id || null,
+        history_image_key: item.history_image_key || "",
         preview_url: item.preview_url,
         url: item.url,
         width: item.width || 0,
         height: item.height || 0,
         translated_engines: item.translated_engines || [],
         cached_translations: item.cached_translations || {},
+        translated_variants: item.translated_variants || [],
+        translation_job_status: item.translation_job_status || "",
+        translation_job_id: item.translation_job_id || "",
         index,
       }));
     }

@@ -219,6 +219,28 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("_split_distant_ocr_groups", pipeline)
 
+    def test_pdf_uses_embedded_text_before_ocr_and_returns_frontend_metadata(self):
+        pipeline = (self.root / "src/lingoveil_browser_pipeline.py").read_text(
+            encoding="utf-8"
+        )
+        image_pipeline = (
+            self.root / "src/lingoveil_image_pipeline.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("def extract_pdf_page_text_blocks", image_pipeline)
+        self.assertIn('page.get_text("blocks", sort=True)', image_pipeline)
+        self.assertIn("if pdf_text_blocks:", pipeline)
+        self.assertIn('text_source = "pdf_text"', pipeline)
+        self.assertIn('text_source = "ocr"', pipeline)
+        self.assertIn('"target_language": self._target_language(engine_name)', pipeline)
+        self.assertIn('"rendered_url": f"/api/pdf-rendered/', pipeline)
+        self.assertIn('def pdf_rendered_image_path', pipeline)
+
+        server = (self.root / "src/lingoveil_browser_server.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('@app.get("/api/pdf-rendered/{rendered_id}")', server)
+
     def test_exact_overlay_growth_is_capped(self):
         overlay = (self.root / "src/lingoveil_overlay.py").read_text(encoding="utf-8")
 
@@ -549,6 +571,8 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn('@app.post("/api/translation-jobs/page-image")', server)
 
+        self.assertIn('@app.post("/api/translation-jobs/page-images")', server)
+
         self.assertIn('@app.post("/api/translation-jobs/pdf-page")', server)
 
         self.assertIn('@app.get("/api/translation-jobs/{job_id}")', server)
@@ -560,6 +584,16 @@ class LiveSourceTests(unittest.TestCase):
         self.assertIn(".then(job.task)", browser)
 
         self.assertIn("runTranslationBackgroundJob", browser)
+
+        self.assertIn('api("/api/translation-jobs/page-images"', browser)
+
+        silent_prefetch = browser[
+            browser.index("async function translatePageImageSilent"):
+            browser.index("async function waitForPrefetch")
+        ]
+        self.assertNotIn("enqueueTranslation(", silent_prefetch)
+        self.assertIn("{onStatus}", silent_prefetch)
+        self.assertIn('status === "running"', silent_prefetch)
 
         self.assertIn("isTransientNetworkError(err)", browser)
 
@@ -618,7 +652,7 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("border-radius: 0", styles)
 
-        self.assertIn("styles.css?v=20260807-18", html)
+        self.assertIn("styles.css?v=20260812-2", html)
 
     def test_light_theme_main_panels_have_readable_contrast(self):
         styles = (self.root / "web/styles.css").read_text(encoding="utf-8")
@@ -630,6 +664,26 @@ class LiveSourceTests(unittest.TestCase):
         self.assertIn(
             ':root[data-theme="light"] .preview-viewport .preview-placeholder',
             styles,
+        )
+
+    def test_filtered_autoselection_and_cached_navigation_do_not_block_each_other(self):
+        browser = (self.root / "web/app.js").read_text(encoding="utf-8")
+        selection = browser[
+            browser.index("async function selectGalleryImage"):
+            browser.index("function createThumbElement")
+        ]
+        prefetch = browser[
+            browser.index("async function enqueuePrefetchImages"):
+            browser.index("function imagePassesOcrFilter")
+        ]
+
+        self.assertNotIn("if (state.processing) return", selection)
+        self.assertIn("ensureGalleryItemDimensions(item)", selection)
+        self.assertIn("selectionGeneration", selection)
+        self.assertIn("Promise.all(selected.map", prefetch)
+        self.assertLess(
+            prefetch.index("Promise.all(selected.map"),
+            prefetch.index("imagePassesOcrFilter(item)"),
         )
 
     def test_untranslated_image_is_blurred_while_translation_runs(self):
@@ -729,9 +783,9 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn('[chapterLabel, imageLabel].filter(Boolean).join(" - ")', browser)
 
-        self.assertIn("styles.css?v=20260807-18", html)
+        self.assertIn("styles.css?v=20260812-2", html)
 
-        self.assertIn("app.js?v=20260807-8", html)
+        self.assertIn("app.js?v=20260812-6", html)
 
         self.assertIn("let translationCacheTtlMs = 5 * 60 * 1000", browser)
 
@@ -1291,6 +1345,79 @@ class LiveSourceTests(unittest.TestCase):
         self.assertIn("catalog-reveal", browser)
 
         self.assertIn("last-read", browser)
+        self.assertIn("catalog.read_chapters?.[chapter.url]", browser)
+        self.assertIn("formatReadDate(readChapter.read_at)", browser)
+        self.assertNotIn("chapter.url === catalog.last_read_url", browser)
+
+        self.assertIn("manga-chapter-download", browser)
+        self.assertIn("queueBookmarkChapterDownload", browser)
+        self.assertIn("/api/translation-jobs/bookmark-chapter", browser)
+
+        browser_server = (
+            self.root / "src/lingoveil_browser_server.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '@app.post("/api/translation-jobs/bookmark-chapter")',
+            browser_server,
+        )
+        self.assertIn("prepare_bookmark_chapter_download", browser_server)
+        self.assertIn("translation_job_status", browser)
+        self.assertIn("page_image_aliases", browser_server)
+        self.assertNotIn("if (state.processing) return;\n  showMangaCatalogLoading(bookmark)", browser)
+
+    def test_bookmark_download_cache_limit_tracks_cached_not_last_read_chapters(self):
+        import sys
+
+        sys.path.insert(0, str(self.root / "src"))
+        from lingoveil_bookmarks import MangaBookmarkStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            store = MangaBookmarkStore(Path(temp))
+            manga_url = "https://mangadex.org/title/example/title"
+            chapters = [f"https://mangadex.org/chapter/{number}" for number in range(3)]
+            store.add(
+                url=manga_url,
+                title="Example",
+                site="mangadex",
+                catalog_chapters=[
+                    {"url": url, "chapter": str(index), "label": f"Chapter {index}"}
+                    for index, url in enumerate(chapters)
+                ],
+            )
+            for index, url in enumerate(chapters):
+                store.mark_cached(
+                    manga_url=manga_url,
+                    chapter_url=url,
+                    volume="1",
+                    chapter=str(index),
+                    label=f"Chapter {index}",
+                )
+
+            self.assertEqual(store.recent_chapter_urls(manga_url, 2), set(chapters[-2:]))
+            self.assertEqual(store.recent_chapter_urls(manga_url, 0), set())
+            self.assertEqual(store.get_by_url(manga_url)["last_read_url"], "")
+            store.mark_cached(
+                manga_url=manga_url,
+                chapter_url=chapters[0],
+                volume="1",
+                chapter="0",
+                label="Chapter 0",
+                total_pages=2,
+            )
+            self.assertEqual(
+                store.get_by_url(manga_url)["cached_chapters"][chapters[0]]["status"],
+                "queued",
+            )
+            store.record_cached_page(
+                chapter_url=chapters[0], page_key="page-1", total_pages=2
+            )
+            store.record_cached_page(
+                chapter_url=chapters[0], page_key="page-2", total_pages=2
+            )
+            self.assertEqual(
+                store.get_by_url(manga_url)["cached_chapters"][chapters[0]]["status"],
+                "complete",
+            )
 
     def test_progress_backup_restore_ui_and_api_exist(self):
         server = (self.root / "app/live_server.py").read_text(encoding="utf-8")
@@ -1806,7 +1933,7 @@ class LiveSourceTests(unittest.TestCase):
 
         self.assertIn("Authorization", updater)
 
-        self.assertIn('APP_VERSION = "3.1.7"', updater)
+        self.assertIn('APP_VERSION = "3.2.1"', updater)
 
         self.assertIn('UPDATE_PROJECT_ID = "lingoveil-docker"', updater)
 
