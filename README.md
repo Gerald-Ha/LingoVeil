@@ -691,3 +691,9 @@ If you experience problems, check the following first:
 - is enough RAM or GPU memory available?
 
 ---
+
+## Official Project Website
+
+For a detailed project overview, architecture and development background:
+
+https://gerald-hasani.com/projects/lingoveil
