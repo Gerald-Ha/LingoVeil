@@ -689,3 +689,9 @@ Bei Problemen sollten zuerst geprüft werden:
 - stehen genügend RAM beziehungsweise GPU-Speicher zur Verfügung?
 
 ---
+
+## Official Project Website
+
+Für eine detaillierte Projektübersicht sowie Informationen zur Architektur und Entwicklung:
+
+https://gerald-hasani.com/projects/lingoveil
